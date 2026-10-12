@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Self-test for googlebook-vm: status and error paths against stub systemctl/losetup/udisksctl.
+set -euo pipefail
+CLI=$(cd "$(dirname "$0")" && pwd)/googlebook-vm
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+mkdir -p "$T/bin" "$T/run" "$T/state" "$T/cfg/googlebook-vm" "$T/home"
+# shellcheck disable=SC2016 # the stub script body must stay unexpanded
+printf '#!/bin/sh\n[ "$2" = is-active ] && exit 3\nexit 0\n' > "$T/bin/systemctl"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/losetup"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/udisksctl"
+chmod +x "$T/bin/"*
+export PATH=$T/bin:$PATH XDG_RUNTIME_DIR=$T/run XDG_CONFIG_HOME=$T/cfg HOME=$T/home GBOS_STATE=$T/state
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+field() { "$CLI" status --json | jq -r ".$1"; }
+expect() { # expect NAME FIELD WANTED
+  local got; got=$(field "$2")
+  [ "$got" = "$3" ] || fail "$1: .$2 was '$got', wanted '$3'"
+  echo "ok   $1"
+}
+
+expect "empty state is unconfigured" state unconfigured
+touch "$T/state/setup.ok"
+expect "setup.ok is stopped" state stopped
+echo exit-code > "$T/state/vm.result"
+expect "bad vm.result is failed" state failed
+rm "$T/state/vm.result" "$T/state/setup.ok"
+echo "7/8 Android image" > "$T/state/setup.failed"
+expect "setup.failed is setup-failed" state setup-failed
+expect "shareMode defaults to usb" shareMode usb
+echo GBOS_SHARE=0 > "$T/cfg/googlebook-vm/env"
+expect "GBOS_SHARE=0 gives shareMode off" shareMode off
+rc=0; "$CLI" nonsense 2>/dev/null || rc=$?
+[ "$rc" = 2 ] || fail "unknown command exited $rc, wanted 2"
+echo "ok   unknown command exits 2"

@@ -346,6 +346,21 @@ Traps: never pass user-controlled strings through `sh -c`; build argv arrays.
 The QMP socket is in `$XDG_RUNTIME_DIR` (0700), never `/tmp`. `kill` is the only
 path that does not let Android shut down.
 
+**Step 6 as implemented (deviations):**
+- The VM unit runs `googlebook-vm _vm`, which runs `boot_vm.sh` and writes
+  `vm.result` (`success` / `exit-code`) itself, instead of an `ExecStopPost`.
+  A deliberate force stop ends the wrapper before it writes, so it reads
+  `stopped`, not `failed`, which is what a deliberate stop should show.
+- `_vm` builds `GBOS_SHARE_ARGS`. `start` passes only `GBOS_STATE`,
+  `GBOS_LIBEXEC`, `PATH` and the display variables that are set
+  (`WAYLAND_DISPLAY DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE`).
+- The env file is sourced with `set -a`, so any `GBOS_*` override in it (for
+  example `GBOS_MEM`) reaches `boot_vm.sh`.
+- Setup has 8 steps (the donor unpack is its own step). Step 2 is skipped when
+  `modules/virtio_snd.ko` exists (`shortcut:` comment in the code).
+- `status` finds the drive's mount point with `findmnt` on the loop device
+  from `losetup -j`.
+
 ### 7. Plugin files
 
 - `manifest.json`: `{"schemaVersion":1,"id":"nixarchy.googlebook","name":"Googlebook VM",
