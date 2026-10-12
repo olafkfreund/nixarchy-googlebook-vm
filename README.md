@@ -13,6 +13,28 @@ image under QEMU/KVM, adapted so it boots on a VM:
 The result is a working Android desktop: login/setup UI, keyboard + mouse, and outbound
 network.
 
+## Status (October 2026)
+
+| part | state |
+|---|---|
+| Flake, Home Manager module, `googlebook-vm` CLI, `nixarchy.googlebook` menu plugin | done; `nix flake check` passes (18-case selftest) |
+| Setup pipeline (download, verify, prepare, guest Mesa, image build, shared drive) | done and run end to end on real inputs |
+| Booting the Googlebook image | **not tested here: no CPU with GFNI + VAES was available** |
+
+The lapis image is compiled with GFNI and VAES instructions throughout (`/init`, `libc`,
+`linker64`), so on older CPUs the guest dies at its first instruction, under KVM and under
+QEMU's TCG emulator alike. There is no check to disable; the instructions are in the machine
+code. Tested and ruled out on AMD Zen 2, Intel Comet Lake and Intel Broadwell. Every x86
+Googlebook ships with a recent Intel CPU (Panther Lake, Wildcat Lake), and the rest are ARM,
+so no Googlebook recovery image targets older x86 CPUs. The full investigation is in
+[`plan/`](plan/2026-10-12-no-issue-omarchy-plugin.md) under *Step 11 result*.
+
+**On an older CPU:** Google's SDK repository ships an Android 17 **desktop emulator image**
+(`system-images;android-37.1;android-desktop;x86_64`, "Google APIs Desktop (Preview)").
+Its `/init`, `libc`, `linker64`, `libc++` and `surfaceflinger` contain no GFNI or VAES
+instructions, so it is the likely route on such hosts. It runs in the Android emulator, not
+in this pipeline, and has not been boot-tested here.
+
 ## Requirements
 
 - **A CPU with GFNI and VAES**: Intel 11th gen (Tiger Lake) or newer, AMD Zen 4 or newer.

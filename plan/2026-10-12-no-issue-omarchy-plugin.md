@@ -665,3 +665,22 @@ implements steps 3-9, one step per message, on the same agent. Steps 1, 2 and 11
 need network, a 19 GB download and a real desktop; the session model and the
 operator run them. Step 10 is a separate `/etc/nixos` change. A fresh Opus
 reviewer checks `git diff` against this plan before the PR.
+
+## Outcome (2026-10-12)
+
+Steps 1-9 plus 6b and 6c are done and in PR #1. Step 10 (`/etc/nixos`) was
+deliberately skipped, and step 11 (boot) is blocked: the image needs GFNI and VAES,
+which none of the available hosts have (see "Step 11 result so far").
+
+Follow-up research:
+- No Googlebook recovery image targets older x86 CPUs. The x86 models are Intel
+  Panther Lake / Wildcat Lake; the rest are ARM (Snapdragon, MediaTek).
+- The Android 17 desktop emulator image
+  (`system-images;android-37.1;android-desktop;x86_64`, x86_64-37.1_r01.zip, SHA-1
+  `7d2d46bee15214a5e4320df2ed602773dc3fd190`) has no GFNI or VAES in `/init`,
+  `/system/bin/init`, `libc`, `linker64`, `libc++` or `surfaceflinger` (objdump
+  counts, all 0; AVX2 only, and AVX-512 only in libhwui's runtime-dispatched Skia
+  path). A boot test with the nixpkgs emulator 37.1.11 was started and abandoned at
+  the user's request before it completed. The emulator process was killed (exit 137)
+  before `sys.boot_completed`; the cause was not investigated.
+- The user chose to stop here. All downloaded and built state was deleted.
