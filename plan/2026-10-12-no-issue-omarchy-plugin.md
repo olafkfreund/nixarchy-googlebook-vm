@@ -297,17 +297,29 @@ path that does not let Android shut down.
   exact text `erase`. Colours and controls come from `qs.Commons`/`qs.Ui` only.
 - `googlebook-binds.lua`: the header comment of `nixarchy.microvm`'s
   `microvm-binds.lua` with names changed, then
-  `o.bind("SUPER + ALT + G", "Googlebook VM", "omarchy-shell shell toggle nixarchy.googlebook '{}'")`.
+  `o.bind("SUPER + ALT + Y", "Googlebook VM", "omarchy-shell shell toggle nixarchy.googlebook '{}'")`.
 - `LICENSE`.
 
 → verify: `omarchy plugin validate <dir with the four files>`;
 `qmllint -I "$OMARCHY_PATH/shell" Menu.qml` clean;
-`hyprctl binds -j | jq '.[] | select(.modmask==72 and .key=="G")'` is empty on
+`hyprctl binds -j | jq '.[] | select(.modmask==72 and .key=="Y")'` is empty on
 p620 (SUPER=64 + ALT=8).
 Traps: no bar widget kind. No polling while closed. The plugin folder must hold
 no symlinks. Do not test UI in the host's running shell: use the nixarchy QEMU
 test VM as `nixarchy.winvm`'s AGENTS.md describes, or the host only after
 validation.
+
+**Step 7 as implemented (deviations):**
+- **Chord changed to `SUPER + ALT + Y`** (user decision, 2026-10-12). The check
+  found `SUPER + ALT + G` already bound on p620 (Hyprland "move window out of
+  group"). `Y` is free there and is not one of the chords nixarchy seeds on new
+  installs (A D E H N O P U V). Every later step uses `Y`; the approved intent and
+  spec still say `G` and are left as approved.
+- `F` is offered only when `shareMode` is not `off` (as well as `share` being
+  non-empty).
+- `qmllint` warnings left are all from untyped Quickshell / `qs.Commons`
+  singletons (the same class `nixarchy.winvm` shows), plus two "unqualified
+  access" notes in the inline `Action` component.
 
 ### 8. `flake.nix`
 
@@ -325,7 +337,7 @@ validation.
 - `packages.default = googlebook-vm`.
 - `devShells.default`: `mkShell` with the same deps plus `shellcheck setools qt6Packages.qtdeclarative`.
 - `homeManagerModules.default`: options `enable` (bool), `keybinding`
-  (`nullOr (strMatching "[A-Z0-9_ +]+")`, default `"SUPER + ALT + G"`), `sharedDir`
+  (`nullOr (strMatching "[A-Z0-9_ +]+")`, default `"SUPER + ALT + Y"`), `sharedDir`
   (`nullOr str`, default `"Googlebook"`, relative to home; the description warns
   about sharing `$HOME`). When enabled: `home.packages`; the binds file via
   `builtins.replaceStrings` (microvm pattern); `xdg.configFile."googlebook-vm/env".text`
@@ -388,7 +400,7 @@ keeps its old `PATH`/`OMARCHY_PATH`.
 One-time: `pcall(require, "hypr.googlebook-binds")` in `~/.config/hypr/bindings.lua`,
 then `omarchy plugin enable nixarchy.googlebook`.
 
-1. `SUPER+ALT+G` → `omarchy-shell shell isOpen nixarchy.googlebook` = `true`.
+1. `SUPER+ALT+Y` → `omarchy-shell shell isOpen nixarchy.googlebook` = `true`.
 2. `U`: setup runs with step progress. Stop it mid-download
    (`systemctl --user stop googlebook-vm-setup`), press `U` again: it resumes.
 3. `S`: Android desktop appears; a YouTube or system sound plays on the host.

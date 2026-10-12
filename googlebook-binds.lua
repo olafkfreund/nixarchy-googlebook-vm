@@ -1,0 +1,14 @@
+-- nixarchy.googlebook: open the Googlebook VM menu from the keyboard.
+--
+-- Lives in ~/.config/hypr/googlebook-binds.lua. With Nix, the flake's Home
+-- Manager module writes it (programs.googlebook-vm.keybinding). Without
+-- Nix, copy this file there from the plugin folder. Either way,
+-- ~/.config/hypr/bindings.lua loads it with
+--
+--   pcall(require, "hypr.googlebook-binds")
+--
+-- pcall, not a bare require: bindings.lua is yours and outlives this file,
+-- and a missing module in a bare require takes the whole config down.
+--
+-- The description is what Omarchy's key bindings menu (Super+K) lists.
+o.bind("SUPER + ALT + Y", "Googlebook VM", "omarchy-shell shell toggle nixarchy.googlebook '{}'")
