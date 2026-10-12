@@ -114,10 +114,12 @@ fi
 
 NDK_ZIP="$STATE/android-ndk-r30-linux.zip"
 if [ ! -d "$NDK" ] && [ -z "${ANDROID_NDK:-}" ]; then
-  say "downloading Android NDK r30"
   need unzip
-  curl -fL --retry 3 -C - -o "$NDK_ZIP.part" "https://dl.google.com/android/repository/android-ndk-r30-linux.zip"
-  mv "$NDK_ZIP.part" "$NDK_ZIP"
+  if [ ! -f "$NDK_ZIP" ]; then
+    say "downloading Android NDK r30"
+    curl -fL --retry 3 -C - -o "$NDK_ZIP.part" "https://dl.google.com/android/repository/android-ndk-r30-linux.zip"
+    mv "$NDK_ZIP.part" "$NDK_ZIP"
+  fi
   verify "$NDK_ZIP"
   unzip -q "$NDK_ZIP" -d "$STATE"
 fi

@@ -229,6 +229,13 @@ when `GBOS_STATE` is set. Keep every existing error message and guard. The
   unset, after the `--download-only` exit. An explicit wrong `ANDROID_NDK` still
   hits the existing "NDK not found" error.
 - The Mesa tarball is verified whenever it exists.
+- (Found on the first real run.) The NDK zip is downloaded only when it is not
+  already in `$STATE`; an existing zip is verified and unpacked instead of being
+  fetched again (704 MB).
+- (Found on the first real run.) Mesa's meson needs Python with `mako`, `pyyaml`
+  and `packaging` importable. Step 8 uses
+  `python3.withPackages (ps: [ ps.mako ps.pyyaml ps.packaging ])` and `glslang`
+  as runtime dependencies, not a bare `python3`.
 - A custom output path outside `$STATE` counts as unpinned and fails (the
   `${FILE#$STATE/}` rule); `GBOS_UNVERIFIED=1` covers that case.
 
