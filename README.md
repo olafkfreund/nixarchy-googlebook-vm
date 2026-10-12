@@ -158,7 +158,7 @@ GBOS_SNAPSHOT=on ./boot_vm.sh "$PWD" gb-venus 300
 | `GBOS_XRES` / `GBOS_YRES` | `1920` / `1440` | guest display size (4:3 matches the wacom tablet) |
 | `GBOS_SNAPSHOT` | `off` | `off` = persist `/data` between boots; `on` = throwaway disk |
 | `GBOS_FORCE` | `0` | `1` lets `build_security_image.sh` overwrite an existing image |
-| `GBOS_DISPLAY_ARGS` | `-display sdl,gl=on` | e.g. `-display none -spice unix=on,addr=/tmp/gbos-spice,gl=es` + a SPICE client (viewer-drawn cursor), `-display egl-headless` (headless), `-display egl-headless -vnc 127.0.0.1:0` (VNC) |
+| `GBOS_DISPLAY_ARGS` | `-display sdl,gl=on` | e.g. `-display none -spice unix=on,addr=$XDG_RUNTIME_DIR/googlebook-vm/spice,gl=es` + a SPICE client (viewer-drawn cursor), `-display egl-headless` (headless), `-display egl-headless -vnc 127.0.0.1:0` (VNC) |
 | `GBOS_GPU_ARGS` | virtio-gpu-gl-pci, Venus, 1920×1200 | full GPU device line |
 | `GBOS_INPUT_ARGS` | xhci + usb-kbd + usb-mouse | input devices |
 | `GBOS_NET_ARGS` | user-mode NAT over virtio-net | set empty for offline |

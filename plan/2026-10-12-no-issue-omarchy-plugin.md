@@ -218,6 +218,11 @@ answers `running`.
 Traps: `GBOS_*_ARGS` are word-split on purpose; keep them unquoted. It is POSIX
 `sh` (`#!/bin/sh`), not bash: no arrays, no `[[`.
 
+**Step 5 as implemented (deviation):** `GBOS_AUDIO_ARGS` uses
+`${GBOS_AUDIO_ARGS=…}` (no colon), so a set-but-empty value turns audio off; with
+`:=` the empty value would bring the default back and step 5's own check could
+not pass. `GBOS_MEM` and `GBOS_SHARE_ARGS` keep `:=`.
+
 ### 6. `googlebook-vm` CLI (`bin/googlebook-vm`, bash)
 
 - Reads `${XDG_CONFIG_HOME:-~/.config}/googlebook-vm/env` if present
