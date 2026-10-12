@@ -25,7 +25,9 @@ PY
 )
 echo "artifact: $ART"
 mkdir -p "$OUT"
-curl -fL --progress-bar "$ART" -o "$OUT/$ZIP"
-verify "$OUT/$ZIP"
+rm -f "$OUT/$ZIP.part"
+curl -fL --progress-bar "$ART" -o "$OUT/$ZIP.part"
+mv "$OUT/$ZIP.part" "$OUT/$ZIP"
+verify "$OUT/$ZIP" || { rm -f "$OUT/$ZIP"; exit 1; }
 echo "downloaded $OUT/$ZIP"
 echo "now run: python3 unpack_cuttlefish_donor.py $OUT/$ZIP <donor-dir>"

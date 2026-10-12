@@ -59,6 +59,9 @@ else
   echo "note: $STATE/guest-mesa/gl/libEGL_virgl.so not found; building without VirGL GLES (run build_guest_mesa.sh first)" >&2
 fi
 
+# The marker says the image below finished building; an interrupted build leaves none.
+rm -f "$OUT/.complete"
+
 python3 "$HERE/make_lapis_security_port.py" \
   --raw "$RAW" --donor "$DONOR" --out "$OUT" \
   --initrd "$STATE/initrd" --firmware "$STATE/firmware" \
@@ -70,3 +73,4 @@ case " $* " in *" --no-copy "*) : ;; *)
   python3 "$HERE/expand_lapis_userdata.py" "$OUT/googlebook-security.bin" "${GBOS_USERDATA_GIB:-16}"
   ;;
 esac
+touch "$OUT/.complete"

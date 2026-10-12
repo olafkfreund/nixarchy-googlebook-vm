@@ -619,6 +619,22 @@ Verify: selftest cases for 1 (`.bin` without `.complete` → step 7 fails; with
 is deleted), 3 (`kill` with no socket still reaches `systemctl`), 4 (a stub serial
 log with "Kernel panic" → `failed`) and 8. Then `nix flake check` and `qmllint`.
 
+**Step 6c as implemented (deviations):**
+- With `free = false`, the flake's own nixpkgs refuses to evaluate the package,
+  and a consumer's `allowUnfree` cannot reach that instance. `forAll` therefore
+  imports nixpkgs with `allowUnfreePredicate` matching only `googlebook-vm`. Its
+  metadata still says unfree (`meta.unfree = true`; the plugin is `false`), but
+  a consumer needs no `allowUnfree`. This supersedes the "a user needs
+  `allowUnfree`" line in 6c.7.
+- `_setup` has 9 steps; "verify downloads" is step 4. `setup_die` writes
+  `setup.failed` before exiting, because `die` does not fire the ERR trap.
+- `_vm` empties `serial.log` before starting, so an old panic cannot mark a new
+  run failed.
+- The check runs `patchShebangs .` on its source copy (the selftest's `_setup`
+  cases run `prepare.sh`).
+- The image on p620 that predates the marker was marked complete by hand: its
+  build log shows the userdata expansion and `rc=0`.
+
 ## Tests
 
 | command | expected |

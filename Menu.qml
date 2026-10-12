@@ -61,12 +61,13 @@ Item {
     var s = root.vmState
     switch (k) {
     case "U": return s === "unconfigured" || s === "setup-failed"
-    case "S": return s === "stopped" || s === "failed"
+    case "S": return (s === "stopped" || s === "failed") && root.share === ""
     case "X":
     case "K": return s === "running"
     case "B": return s === "stopped"
     case "F": return root.share !== "" && root.shareMode !== "off"
     case "L": return s !== "unconfigured"
+    case "D": return root.share !== ""
     }
     return false
   }
@@ -89,6 +90,7 @@ Item {
       }
       return
     case "F": Quickshell.execDetached(["gio", "open", root.share]); close(); return
+    case "D": Quickshell.execDetached(["googlebook-vm", "files", "--done"]); break
     case "L":
       Quickshell.execDetached(["googlebook-vm", "log", root.vmState === "running" ? "serial" : "setup"])
       close()
@@ -217,7 +219,7 @@ Item {
           }
           if (event.modifiers === Qt.NoModifier && !root.erasePrompt) {
             var text = event.text.toUpperCase()
-            if (["U", "S", "X", "K", "F", "L", "B"].indexOf(text) !== -1) {
+            if (["U", "S", "X", "K", "F", "D", "L", "B"].indexOf(text) !== -1) {
               root.run(text)
               event.accepted = true
             }
@@ -326,6 +328,15 @@ Item {
             font.pixelSize: Style.font.caption
           }
           Text {
+            visible: !root.notFound && root.share !== ""
+            width: parent.width
+            text: "Shared drive is open on the host: press D to release it"
+            color: root.foreground
+            wrapMode: Text.Wrap
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+          Text {
             visible: !root.notFound && root.shareMode === "usb"
             width: parent.width
             text: "Shared drive is not live: open it with googlebook-vm files while the VM is stopped"
@@ -349,6 +360,7 @@ Item {
               foreground: root.killArmed ? Color.urgent : root.foreground
             }
             Action { key: "F"; text: "Open shared folder [F]" }
+            Action { key: "D"; text: "Release shared drive [D]" }
             Action { key: "L"; text: (root.vmState === "running" ? "Serial log" : "Setup log") + " [L]" }
             Action { key: "B"; text: "Rebuild (erases Android's data) [B]" }
           }

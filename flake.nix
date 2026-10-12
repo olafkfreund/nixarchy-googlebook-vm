@@ -7,7 +7,19 @@
     { self, nixpkgs }:
     let
       systems = [ "x86_64-linux" ];
-      forAll = f: nixpkgs.lib.genAttrs systems (system: f system nixpkgs.legacyPackages.${system});
+      # The flake's own nixpkgs instance does the licence check, so a consumer's allowUnfree
+      # cannot reach it: allow exactly this one unfree package here.
+      forAll =
+        f:
+        nixpkgs.lib.genAttrs systems (
+          system:
+          f system (
+            import nixpkgs {
+              inherit system;
+              config.allowUnfreePredicate = p: nixpkgs.lib.getName p == "googlebook-vm";
+            }
+          )
+        );
 
       # Mesa's meson build imports these at configure time.
       pythonEnv =
@@ -77,12 +89,11 @@
             meta = {
               description = "Set up and run the Googlebook Android VM";
               mainProgram = "googlebook-vm";
-              # Bundles scripts from chaitan3/gbos-vm-linux, which has no licence. Not
-              # lib.licenses.unfree: that would force allowUnfree on every user for a script
-              # wrapper. redistributable = false keeps Hydra and caches from publishing it.
+              # Bundles scripts from chaitan3/gbos-vm-linux, which has no licence (all rights
+              # reserved), so it is marked unfree; forAll allows only this package in the flake.
               license = {
                 fullName = "Unlicensed upstream (chaitan3/gbos-vm-linux) + MIT";
-                free = true;
+                free = false;
                 redistributable = false;
               };
             };
@@ -167,7 +178,7 @@
               ''
                 plugin=${self.packages.${system}.plugin}
                 # Sandbox has no /usr/bin/env: check a writable copy with patched shebangs.
-                cp -r ${self} src && chmod -R u+w src && cd src && patchShebangs bin
+                cp -r ${self} src && chmod -R u+w src && cd src && patchShebangs .
 
                 jq -e '.id == "nixarchy.googlebook" and .kinds == ["menu"] and .keepLoaded == true' manifest.json
                 test -f "$plugin/$(jq -r .entryPoints.menu manifest.json)"
