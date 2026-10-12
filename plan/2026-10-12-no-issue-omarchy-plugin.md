@@ -1,0 +1,686 @@
+---
+status: approved
+issue: none (issues are disabled on this repository)
+spec: spec/2026-10-12-no-issue-omarchy-plugin.md
+---
+
+# Plan: Install, run and manage the Googlebook VM from nixarchy
+
+Branch `feat/no-issue-omarchy-plugin`. Name the step you are executing in every
+commit message (`feat(cli): step 6 — googlebook-vm CLI`). A deviation updates
+this file in the same commit as the code.
+
+## Approved decisions (from the spec, self-contained)
+
+- **State vs code.** New `GBOS_STATE`: every output goes there. The default is
+  the script's own directory (`HERE`), so a checkout behaves exactly as today.
+  The installed CLI sets `GBOS_STATE=${XDG_DATA_HOME:-$HOME/.local/share}/googlebook-vm`.
+  Code (`*.py`, `patches/`) is still read from `HERE`.
+- **Checksums.** `checksums.sha256` (`sha256sum -c` format, paths relative to
+  `GBOS_STATE`) pins the recovery `.bin`, each kernel module, the donor zip, the
+  NDK r30 zip and the Mesa tarball. A mismatch or a missing entry exits
+  non-zero. `GBOS_UNVERIFIED=1` is the only bypass and prints a warning.
+- **CLI `googlebook-vm`:** `setup | start | stop | kill | status [--json] | log
+  [setup|serial] | rebuild | files` (`files` only in the fallback). Setup and the
+  VM run as transient systemd **user** units (`googlebook-vm-setup`,
+  `googlebook-vm`, `googlebook-vm-fs`). Status values: `unconfigured`,
+  `setting-up`, `setup-failed`, `stopped`, `running`, `failed`.
+- **`boot_vm.sh`**, all opt-in: `SECS=0` means no timeout; `GBOS_QMP` adds
+  `-qmp unix:$GBOS_QMP,server=on,wait=off`; the exit status is kept except 124;
+  `GBOS_SHARE_ARGS` (default empty); `GBOS_AUDIO_ARGS` (default
+  `-audiodev pipewire,id=snd0 -device virtio-sound-pci,audiodev=snd0`);
+  `GBOS_MEM` (default `6G`) feeds both `-m` and the memfd size; `-name googlebook`.
+- **Share: virtio-fs.** Host:
+  `virtiofsd --shared-dir DIR --socket-path $XDG_RUNTIME_DIR/googlebook-vm/fs.sock
+  --sandbox none --tag host --translate-uid map:1023:$UID:1 --translate-gid map:1023:$GID:1`.
+  QEMU: `-object memory-backend-memfd,id=mem,size=$GBOS_MEM,share=on -numa node,memdev=mem
+  -chardev socket,id=fs0,path=… -device vhost-user-fs-pci,chardev=fs0,tag=host`.
+  Guest: `--hostshare` adds `etc/init/vm-hostshare.rc` mounting `host` at
+  `/data/media/0/Host` with `context=u:object_r:media_rw_data_file:s0` when
+  `sys.user.0.ce_available=true`. The default shared directory is `~/Googlebook`. `$HOME`
+  is never the default.
+- **Pre-approved fallback** (only if step 2 says so): a sparse 16 GiB exFAT
+  `GBOS_STATE/shared.img` on `-device usb-storage,bus=xhci.0`. It is not live; the
+  host reaches it with `googlebook-vm files` only while the VM is stopped.
+- **Plugin `nixarchy.googlebook`:** menu-only, `keepLoaded: true`, files
+  `manifest.json`, `Menu.qml`, `googlebook-binds.lua`, `LICENSE`. Keys `U` setup,
+  `S` start, `X` stop, `K`+`K` force stop, `F` shared folder, `L` log, `B` +
+  typing `erase` rebuild, `Esc` close. It polls `googlebook-vm status --json`
+  every 2 s **only while open**.
+- **Flake:** `packages.{googlebook-vm,plugin,default=googlebook-vm}`,
+  `devShells.default`, `homeManagerModules.default`
+  (`programs.googlebook-vm.{enable,keybinding,sharedDir}`), `checks.default`.
+  Guest Mesa stays a runtime build (nixpkgs NDK is r29; r30 is needed).
+- **Not in scope:** USB passthrough, clipboard, dynamic resize, libvirt, a bar
+  widget, packaging the NDK or recovery image in Nix.
+
+## Corrections to the spec found while planning
+
+1. The spec says the guest "already loads `virtio_snd.ko`". It does not:
+   `make_initrd_x86.py:53` (`added = [...]`) omits it, although
+   `fetch_kernel_modules.sh:32` fetches it. Step 4 adds it.
+2. `make_lapis_security_port.py:337` reads `ROOT/firmware/gpt.json`, so besides
+   `--hostshare` it needs a `--firmware DIR` flag (default `ROOT/firmware`).
+3. The repository has **no LICENSE**. **Decided at approval: MIT**, with a limit
+   found on checking. This repository is a fork of `chaitan3/gbos-vm-linux`, which
+   has no licence, and every pre-existing file is Chaitanya Talnikar's. MIT can
+   therefore cover only files this fork adds (the plugin files, `bin/`,
+   `lib.sh`, `flake.nix`, `dev/`, `checksums.sha256`). `LICENSE` is the MIT
+   text with `Copyright (c) 2026 Olaf Krasicki Freund`, followed by a
+   `Scope` paragraph naming those files. The upstream files stay under their
+   author's terms until he licenses them. `packages.plugin` contains only MIT
+   files. `packages.googlebook-vm` bundles upstream scripts; its `meta.license`
+   is `lib.licenses.unfree` until upstream has a licence, so it is not
+   presented as free software.
+
+## Steps
+
+### 1. Fetch the inputs and record checksums (operator, network, ~40 GB)
+
+In a checkout with the existing scripts, unchanged:
+`./fetch_recovery_image.sh`, `./fetch_kernel_modules.sh`,
+`./fetch_cuttlefish_donor.sh 16373615`, `./build_guest_mesa.sh --download-only`,
+and download NDK r30 (`android-ndk-r30-linux.zip` from dl.google.com).
+Write `checksums.sha256` with `sha256sum` over:
+`android-desktop_signed_recovery_image.bin`, `modules/*.ko`,
+`aosp_cf_x86_64_only_phone-img-16373615.zip`, `android-ndk-r30-linux.zip`,
+`mesa-26.2.4.tar.xz`.
+→ verify: the recovery hash equals the `sha256 …` line `fetch_recovery_image.sh`
+printed; `sha256sum -c checksums.sha256` passes.
+Traps: the 19 GB `.bin` and zips are gitignored. Commit only `checksums.sha256`.
+`GBOS_KEEP_ZIP=1` is not needed: the `.bin` is what gets pinned, not the zip.
+
+**Step 1 as run (deviation):** `ci.android.com`'s build page is now rendered
+client-side and lists no artifacts, so `fetch_kernel_modules.sh` exited with
+"no artifacts found". Each artifact's own page still carries `artifactUrl`, so
+when the listing is empty the script now resolves each wanted module by name. The
+inputs were fetched with the branch scripts, `GBOS_STATE=~/.local/share/googlebook-vm`
+and `GBOS_UNVERIFIED=1` (the pins did not exist yet).
+
+### 2. Probe virtio-fs, SELinux and audio support (static, no boot)
+
+Then run `./prepare.sh` (it produces `firmware/` and `initrd`). Write the probe
+as `dev/probe-guest.sh` (kept, so the decision can be re-checked on a new
+recovery build). It reports:
+
+- **(a) Kernel:** built-in if `strings firmware/kernel | grep -qx virtiofs`
+  (the filesystem registers that name; if the kernel is compressed, decompress it
+  first with `extract_lapis.py`'s output or `scripts/extract-vmlinux` logic). As a
+  module if `virtiofs.ko` is in `system_dlkm_a:/lib/modules` (reuse the `find()`
+  walk in `make_initrd_x86.py:42-48`) or downloadable by
+  `fetch_kernel_modules.sh` (add `virtiofs.ko` to its list and see whether it
+  resolves). Same for `virtio_snd.ko` in system_dlkm.
+- **(b) Policy:** extract `vendor_a:/etc/selinux/precompiled_sepolicy` with
+  `dump.erofs --cat` (offsets as `make_lapis_security_port.py` computes them).
+  With `setools` from nixpkgs:
+  `seinfo --genfscon precompiled_sepolicy | grep virtiofs`, and
+  `sesearch -A -s init -c filesystem -p relabelfrom,relabelto,mount precompiled_sepolicy`
+  and `sesearch -A -t media_rw_data_file -c filesystem -p associate`.
+  The mount needs init to be allowed `mount`+`relabelfrom` on the virtiofs label
+  and `relabelto` on `media_rw_data_file`'s filesystem.
+
+Record the result **in this file** under a new `## Step 2 result` heading:
+- (a) and (b) both pass → **virtio-fs** path (step 4a);
+- either fails → **USB fallback** (step 4b). Do not attempt sepolicy surgery.
+
+→ verify: the probe's output is pasted into the result section, and the chosen
+path is stated.
+Traps: do not boot anything yet. The runtime proof is step 11.
+
+## Step 2 result (2026-10-12): USB fallback (step 4b)
+
+`dev/probe-guest.sh` on recovery build `lapis-user/16452207`, kernel
+`6.18.21-android17-5-g3938c8d97142-ab16302624`:
+
+```
+== (a) kernel
+CONFIG_VIRTIO_FS=y
+CONFIG_FUSE_FS=y
+# CONFIG_SND_VIRTIO is not set
+CONFIG_USB_STORAGE=y
+CONFIG_EXFAT_FS=y
+== (b) vendor SELinux policy
+vendor_a at 6288310272; precompiled_sepolicy 951518 bytes
+-- genfscon for virtiofs:
+(none)
+virtiofs label: (none: files would be unlabeled)
+ok   init may mount the virtiofs fs
+ok   init may relabel from the virtiofs label
+MISS init may relabel to media_rw_data_file
+MISS media_rw_data_file may live on that fs
+MISS init may mount on media_rw_data_file dirs
+== result
+USB fallback: kernel_ok=1 policy_ok=0 (plan step 4b)
+```
+
+Controls, run separately to show the queries work: `init` → `tmpfs`
+`filesystem mount` is found. The only `relabelto` targets init has are the
+`contextmount_type` attribute (`app_fusefs`, `oemfs`) and three vendor
+mount-point types. `oemfs` gives apps read and execute but not write, and it is
+outside shared storage, so it is no substitute. The USB path is allowed:
+`genfscon vfat` and `exfat` exist, and `vold` may mount `sdcard_type`
+(`exfat fuseblk sdcardfs vfat`).
+
+**Decision: step 4b.** A live share would need a vendor sepolicy change
+(a `genfscon virtiofs` label plus init `relabelto`/`mounton` on
+`media_rw_data_file`), which this plan rules out. That is a candidate follow-up
+task, not part of this one.
+
+Consequences for later steps:
+- Step 4 does only its "Common" part. No `--hostshare` flag, no rc file, and
+  `build_security_image.sh` gets only `--firmware`.
+- Step 6 implements only the USB branch of `start` and the `files` command.
+  `shareMode` is `usb` (or `off` when `sharedDir` is null). `virtiofsd` is not
+  a runtime dependency (step 8).
+- Step 6 `files` mounts the drive with `udisksctl` (no root), which puts it at
+  `/run/media/$USER/GOOGLEBOOK`; a chosen directory would need root. `files`
+  then opens that path with `xdg-open`, and `files --done` unmounts it and
+  detaches the loop device. `status --json` reports `share` = that path while
+  it is mounted, else `""`. So the menu's `F` (offered when `share` is non-empty)
+  opens the mounted drive. While the drive is mounted on the host, `start`
+  refuses: one filesystem must never be mounted by two kernels.
+- Step 8's Home Manager option `sharedDir` becomes `sharedDrive` (bool, default
+  `true`), written as `GBOS_SHARE=1|0` in `~/.config/googlebook-vm/env`. There is
+  no host directory to create, so `home.activation` is dropped. The `$HOME`
+  warning no longer applies: the drive holds only what the user copies onto it.
+- If vold rejects exFAT at step 11, switch `mkfs.exfat` to `mkfs.vfat -F 32`
+  (4 GiB file limit) and record it here.
+- `CONFIG_SND_VIRTIO` is not built in, so the `virtio_snd.ko` added in step 4 is
+  required. Its build id `ab16302624` matches the kernel.
+
+### 3. Scripts: `GBOS_STATE` and checksum verification
+
+- New `lib.sh` (sourced): `STATE=${GBOS_STATE:-$HERE}` and
+  `verify FILE` → `(cd "$STATE" && grep -F "  ${FILE#$STATE/}" "$HERE/checksums.sha256" | sha256sum -c --status)`,
+  failing with `checksum mismatch or unpinned: FILE` unless `GBOS_UNVERIFIED=1`.
+- `prepare.sh:9,17,19,22-24,29,32`: `$HERE/firmware|initrd|modules` → `$STATE/…`;
+  the `.bin` default → `$STATE/…`.
+- `fetch_recovery_image.sh:11,13`: defaults → `$STATE`; call `verify` on `OUT`
+  after extraction (line 49).
+- `fetch_kernel_modules.sh:17`: `OUT` default → `$STATE/modules`; after the
+  Python finishes, `verify` each `*.ko`. The `exec python3` at line 19 must become
+  a plain call so the verify can run after it.
+- `fetch_cuttlefish_donor.sh:13`: `OUT` default → `$STATE`; `verify` the zip.
+- `build_guest_mesa.sh:21,24-26,57-67,119,138,144,158-195`: `$HERE` → `$STATE`,
+  **except** `PATCH` (line 28), which stays in `HERE`. `verify` the Mesa tarball
+  after download.
+- `build_security_image.sh:6-8,25,49-58,67`: `$HERE` → `$STATE` for data, and
+  pass `--initrd "$STATE/initrd" --firmware "$STATE/firmware"
+  --venus-lib "$STATE/guest-mesa/libvulkan_virtio.so" --virgl-dir "$STATE/guest-mesa/gl"`
+  at line 61.
+- Add the NDK fetch to `build_guest_mesa.sh`: if `$NDK` is missing, download
+  `android-ndk-r30-linux.zip` to `$STATE`, `verify`, and unzip.
+
+→ verify: `bash -n *.sh lib.sh`; `shellcheck *.sh lib.sh`; in a checkout with the
+step 1 inputs, `./prepare.sh` still writes `./firmware` and `./initrd`; with
+`GBOS_STATE=/tmp/x` it writes there; flipping one byte of a `.ko` makes the
+module fetch's verify fail with the file named.
+Traps: `HERE` must keep meaning "where the code is". Outputs never go to `HERE`
+when `GBOS_STATE` is set. Keep every existing error message and guard. The
+`GBOS_FORCE` refusal (`build_security_image.sh:32-46`) is untouched.
+
+**Step 3 as implemented (deviations):**
+- `--firmware "$STATE/firmware"` is **not** passed yet: the flag does not exist
+  until step 4, and argparse would reject it. Step 4 adds it to the
+  `build_security_image.sh` call.
+- `fetch_recovery_image.sh` deletes `OUT` when `verify` fails. Otherwise the next
+  run says "already present" and never checks it again.
+- The NDK download runs only when `$NDK` is missing **and** `ANDROID_NDK` is
+  unset, after the `--download-only` exit. An explicit wrong `ANDROID_NDK` still
+  hits the existing "NDK not found" error.
+- The Mesa tarball is verified whenever it exists.
+- (Found on the first real run.) The NDK zip is downloaded only when it is not
+  already in `$STATE`; an existing zip is verified and unpacked instead of being
+  fetched again (704 MB).
+- (Found on the first real run.) Mesa's meson needs Python with `mako`, `pyyaml`
+  and `packaging` importable. Step 8 uses
+  `python3.withPackages (ps: [ ps.mako ps.pyyaml ps.packaging ])` and `glslang`
+  as runtime dependencies, not a bare `python3`.
+- A custom output path outside `$STATE` counts as unpinned and fails (the
+  `${FILE#$STATE/}` rule); `GBOS_UNVERIFIED=1` covers that case.
+
+### 4. Guest image: modules and share
+
+Common:
+- `make_initrd_x86.py:53`: append `'virtio_snd.ko'` to `added` (no deps).
+- `make_lapis_security_port.py`: add `ap.add_argument('--firmware', default=str(ROOT / 'firmware'))`
+  next to line 315, and use `Path(a.firmware) / 'gpt.json'` at line 337.
+
+**4a (virtio-fs path):**
+- If step 2 found virtiofs as a module: add `'virtiofs.ko'` to `added`
+  (`make_initrd_x86.py:53`) and to `DEFAULT` (`fetch_kernel_modules.sh:32`),
+  and pin it in `checksums.sha256`.
+- `make_lapis_security_port.py`: `HOSTSHARE_RC = b'''…'''` beside the other
+  `*_RC` constants (line 46 onwards), with the exact text:
+  ```
+  # Mount the host's shared folder (virtio-fs tag "host") inside shared storage.
+  on property:sys.user.0.ce_available=true
+      mkdir /data/media/0/Host 0770 media_rw media_rw
+      mount virtiofs host /data/media/0/Host nosuid nodev noexec context=u:object_r:media_rw_data_file:s0
+  ```
+  `ap.add_argument('--hostshare', action='store_true', help='mount the virtio-fs tag "host" at /data/media/0/Host')`
+  and, after line 488,
+  `if a.hostshare: add('etc/init/vm-hostshare.rc', HOSTSHARE_RC, 'vendor_configs_file')`.
+- `build_security_image.sh:61-63`: add `--hostshare` to the flags.
+
+**4b (USB fallback):** no image change. Record it under "Step 2 result".
+
+→ verify: `python3 -m py_compile make_lapis_security_port.py make_initrd_x86.py`;
+`GBOS_STATE=… GBOS_FORCE=1 ./build_security_image.sh` completes. Then
+`image-security/manifest.json` lists `etc/init/vm-hostshare.rc` (4a), and
+`initrd.json` lists `virtio_snd.ko`.
+Traps: a rebuild erases the VM's `/data`. Use a separate `GBOS_SECURITY_DIR` if an
+image you care about exists. `added` modules must come from the same kernel build
+(`16302624`), or vermagic fails at boot.
+
+### 5. `boot_vm.sh`
+
+- After line 31: `: "${GBOS_MEM:=6G}"`, `: "${GBOS_AUDIO_ARGS:=-audiodev pipewire,id=snd0 -device virtio-sound-pci,audiodev=snd0}"`,
+  `: "${GBOS_SHARE_ARGS:=}"`.
+- Line 55: `-m 6G` → `-m "$GBOS_MEM"`; add `-name googlebook`.
+- Line 59: add `$GBOS_AUDIO_ARGS $GBOS_SHARE_ARGS`, and
+  `${GBOS_QMP:+-qmp unix:$GBOS_QMP,server=on,wait=off}`.
+- Replace `timeout "$SECS" qemu… || true` with: run under `timeout` only when
+  `SECS` ≠ 0; capture the status; `exit 0` on 124, else exit with it. Keep the
+  final `wc -l`.
+- Line 35-44: `X` stays the workdir argument (the CLI passes `GBOS_STATE`).
+- README: the SPICE example's `/tmp/gbos-spice` → `$XDG_RUNTIME_DIR/googlebook-vm/spice`.
+
+→ verify: `bash -n boot_vm.sh`; `GBOS_AUDIO_ARGS= ./boot_vm.sh "$PWD" t 60` behaves
+as before; with `GBOS_QMP=$XDG_RUNTIME_DIR/gb.qmp`, `echo
+'{"execute":"qmp_capabilities"}{"execute":"query-status"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/gb.qmp`
+answers `running`.
+Traps: `GBOS_*_ARGS` are word-split on purpose; keep them unquoted. It is POSIX
+`sh` (`#!/bin/sh`), not bash: no arrays, no `[[`.
+
+**Step 5 as implemented (deviation):** `GBOS_AUDIO_ARGS` uses
+`${GBOS_AUDIO_ARGS=…}` (no colon), so a set-but-empty value turns audio off; with
+`:=` the empty value would bring the default back and step 5's own check could
+not pass. `GBOS_MEM` and `GBOS_SHARE_ARGS` keep `:=`.
+
+### 6. `googlebook-vm` CLI (`bin/googlebook-vm`, bash)
+
+- Reads `${XDG_CONFIG_HOME:-~/.config}/googlebook-vm/env` if present
+  (`GBOS_SHARE_DIR`). `SHARE=$GBOS_SHARE_DIR`; empty means no share.
+- `GBOS_STATE` default as above. The code directory is
+  `GBOS_LIBEXEC` (set by the Nix wrapper to `$out/share/googlebook-vm`; from a
+  checkout, `$(dirname "$0")/..`).
+- `RUN=$XDG_RUNTIME_DIR/googlebook-vm` (mkdir 0700), with `qmp.sock` and `fs.sock`.
+- `setup`: `systemd-run --user --unit=googlebook-vm-setup --collect
+  --property=StandardOutput=append:$GBOS_STATE/setup.log …` running an inner
+  `googlebook-vm _setup`, which runs the steps in order. Before each it writes
+  `N/7 name` to `setup.step`, skips the step if its output exists, and writes
+  `setup.ok` at the end. On failure it writes `setup.failed` with the step.
+- `start`: refuses unless `setup.ok`. If sharing and 4a: `mkdir -p "$SHARE"`,
+  `systemd-run --user --unit=googlebook-vm-fs --collect virtiofsd …` (decisions
+  above), wait up to 5 s for `fs.sock`, set `GBOS_SHARE_ARGS`. If 4b: create
+  `shared.img` once (`truncate -s 16G` + `mkfs.exfat -L GOOGLEBOOK`) and set
+  `GBOS_SHARE_ARGS=-drive if=none,id=usbshare,format=raw,file=$GBOS_STATE/shared.img
+  -device usb-storage,bus=xhci.0,drive=usbshare`. Then `systemd-run --user
+  --unit=googlebook-vm --collect --setenv=…` for `boot_vm.sh "$GBOS_STATE" googlebook 0`,
+  with `GBOS_QMP=$RUN/qmp.sock`, `BindsTo=`-style cleanup:
+  `--property=ExecStopPost=systemctl --user stop googlebook-vm-fs`.
+- `stop`: QMP `system_powerdown`; poll `systemctl --user is-active googlebook-vm`
+  for 60 s; if still active, print
+  `Android may be showing its power menu: choose Power off, or run googlebook-vm kill`
+  and exit 1.
+- `kill`: QMP `stop` then `quit`; `systemctl --user stop googlebook-vm` if still active.
+- `status --json`: one line,
+  `{"state":…,"step":…,"share":…,"shareMode":"virtiofs|usb|off","log":…,"state_dir":…}`,
+  built with `jq -n --arg`. State order: active `googlebook-vm` → `running`; active
+  `googlebook-vm-setup` → `setting-up`; `setup.failed` → `setup-failed`; no
+  `setup.ok` → `unconfigured`; last `googlebook-vm` result failed → `failed`;
+  else `stopped`.
+- `log setup|serial`: `$TERMINAL -e less +F <file>` (`xdg-terminal-exec` if
+  `$TERMINAL` is unset).
+- `rebuild`: refuses while running; `GBOS_FORCE=1 build_security_image.sh` in
+  the setup unit.
+- `files` (4b only): refuses while running; `udisksctl loop-setup -f shared.img`
+  and `udisksctl mount`; `files --done` unmounts and deletes the loop device.
+- Self-test `bin/googlebook-vm-selftest` (run by the flake check): with an
+  empty temporary `GBOS_STATE` and a stub `systemctl` on PATH, `status --json`
+  → `unconfigured`; with `setup.ok` → `stopped`; with `setup.failed` → `setup-failed`.
+
+→ verify: `shellcheck bin/googlebook-vm`; the selftest passes.
+Traps: never pass user-controlled strings through `sh -c`; build argv arrays.
+The QMP socket is in `$XDG_RUNTIME_DIR` (0700), never `/tmp`. `kill` is the only
+path that does not let Android shut down.
+
+**Step 6 as implemented (deviations):**
+- The VM unit runs `googlebook-vm _vm`, which runs `boot_vm.sh` and writes
+  `vm.result` (`success` / `exit-code`) itself, instead of an `ExecStopPost`.
+  A deliberate force stop ends the wrapper before it writes, so it reads
+  `stopped`, not `failed`, which is what a deliberate stop should show.
+- `_vm` builds `GBOS_SHARE_ARGS`. `start` passes only `GBOS_STATE`,
+  `GBOS_LIBEXEC`, `PATH` and the display variables that are set
+  (`WAYLAND_DISPLAY DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE`).
+- The env file is sourced with `set -a`, so any `GBOS_*` override in it (for
+  example `GBOS_MEM`) reaches `boot_vm.sh`.
+- Setup has 8 steps (the donor unpack is its own step). Step 2 is skipped when
+  `modules/virtio_snd.ko` exists (`shortcut:` comment in the code).
+- `status` finds the drive's mount point with `findmnt` on the loop device
+  from `losetup -j`.
+
+### 7. Plugin files
+
+- `manifest.json`: `{"schemaVersion":1,"id":"nixarchy.googlebook","name":"Googlebook VM",
+  "version":"1.0.0","author":"olafkfreund","license":"MIT","description":"Set up, start and stop the Googlebook Android VM",
+  "homepage":"https://github.com/olafkfreund/nixarchy-googlebook-vm","kinds":["menu"],
+  "entryPoints":{"menu":"Menu.qml"},"keepLoaded":true}`.
+- `Menu.qml`: copy the window and keyboard skeleton of
+  `nixarchy.winvm/Menu.qml` (imports lines 1-6, `opened`/`open`/`close`/`toggle`
+  44-52, `focusedScreen()` 35-43, `PanelWindow` with `WlrLayershell` overlay and
+  exclusive keyboard 190-200, `Keys.onPressed` 231) — read it at
+  `~/.config/omarchy/plugins/nixarchy.winvm/Menu.qml`. Replace the content with:
+  a state line, the setup step, the share path and mode, and the key list for the
+  current state (table in the decisions). Use one `Process` running
+  `googlebook-vm status --json`, started on open and by a 2 s `Timer` whose
+  `running: root.opened`. Actions are `Quickshell.execDetached(["googlebook-vm", …])`.
+  `K` needs a second `K` within 3 s; `B` opens a text field and runs only on the
+  exact text `erase`. Colours and controls come from `qs.Commons`/`qs.Ui` only.
+- `googlebook-binds.lua`: the header comment of `nixarchy.microvm`'s
+  `microvm-binds.lua` with names changed, then
+  `o.bind("SUPER + ALT + Y", "Googlebook VM", "omarchy-shell shell toggle nixarchy.googlebook '{}'")`.
+- `LICENSE`.
+
+→ verify: `omarchy plugin validate <dir with the four files>`;
+`qmllint -I "$OMARCHY_PATH/shell" Menu.qml` clean;
+`hyprctl binds -j | jq '.[] | select(.modmask==72 and .key=="Y")'` is empty on
+p620 (SUPER=64 + ALT=8).
+Traps: no bar widget kind. No polling while closed. The plugin folder must hold
+no symlinks. Do not test UI in the host's running shell: use the nixarchy QEMU
+test VM as `nixarchy.winvm`'s AGENTS.md describes, or the host only after
+validation.
+
+**Step 7 as implemented (deviations):**
+- **Chord changed to `SUPER + ALT + Y`** (user decision, 2026-10-12). The check
+  found `SUPER + ALT + G` already bound on p620 (Hyprland "move window out of
+  group"). `Y` is free there and is not one of the chords nixarchy seeds on new
+  installs (A D E H N O P U V). Every later step uses `Y`; the approved intent and
+  spec still say `G` and are left as approved.
+- `F` is offered only when `shareMode` is not `off` (as well as `share` being
+  non-empty).
+- `qmllint` warnings left are all from untyped Quickshell / `qs.Commons`
+  singletons (the same class `nixarchy.winvm` shows), plus two "unqualified
+  access" notes in the inline `Action` component.
+
+### 8. `flake.nix`
+
+- Inputs: `nixpkgs` (`github:NixOS/nixpkgs/nixos-unstable`) only.
+- `packages.googlebook-vm`: `stdenvNoCC.mkDerivation` copying `*.sh *.py lib.sh
+  checksums.sha256 patches/ bin/` to `$out/share/googlebook-vm`, and
+  `makeWrapper $out/share/googlebook-vm/bin/googlebook-vm $out/bin/googlebook-vm
+  --set GBOS_LIBEXEC $out/share/googlebook-vm --prefix PATH : <runtime deps>`.
+  Runtime deps: `qemu virtiofsd python3 curl lz4 erofs-utils e2fsprogs exfatprogs
+  util-linux socat jq unzip meson ninja bison flex pkg-config patch xz gnutar
+  coreutils gnugrep gnused findutils file systemd udisks`.
+- `packages.plugin`: `runCommand` with `cp` of exactly `manifest.json Menu.qml
+  googlebook-binds.lua LICENSE` (comment why not `symlinkJoin`, as in
+  `nixarchy-microvm`).
+- `packages.default = googlebook-vm`.
+- `devShells.default`: `mkShell` with the same deps plus `shellcheck setools qt6Packages.qtdeclarative`.
+- `homeManagerModules.default`: options `enable` (bool), `keybinding`
+  (`nullOr (strMatching "[A-Z0-9_ +]+")`, default `"SUPER + ALT + Y"`), `sharedDir`
+  (`nullOr str`, default `"Googlebook"`, relative to home; the description warns
+  about sharing `$HOME`). When enabled: `home.packages`; the binds file via
+  `builtins.replaceStrings` (microvm pattern); `xdg.configFile."googlebook-vm/env".text`
+  with `GBOS_SHARE_DIR=${config.home.homeDirectory}/${sharedDir}` (empty when null);
+  `home.activation.googlebookShare = lib.hm.dag.entryAfter ["writeBoundary"] "mkdir -p …"`.
+  The package is taken from `self.packages.${pkgs.stdenv.hostPlatform.system}`.
+- `checks.default`: `jq` asserts the manifest (id, kinds = ["menu"], keepLoaded,
+  entry point present in `packages.plugin`); no symlinks in `packages.plugin`
+  (`find -type l` empty); `bash -n` + `shellcheck` on all scripts; `py_compile`
+  on all `.py`; `googlebook-vm-selftest`; `lib.sh`'s `verify` rejects a file
+  with a wrong hash.
+
+→ verify: `nix flake check` passes; `nix build .#plugin .#googlebook-vm`;
+`nix develop -c qemu-system-x86_64 --version`; commit `flake.lock`.
+Traps: `omarchy plugin validate` is not in nixpkgs. Run it in step 7 and step 11,
+not in the sandboxed check. `.gitignore` ignores `*.bin` and `*.zip`, so make sure
+no input file is needed in the source; the flake uses only tracked files.
+
+**Step 8 as implemented (deviations):**
+- `packages.googlebook-vm` uses a custom licence attrset
+  (`fullName = "Unlicensed upstream (chaitan3/gbos-vm-linux) + MIT"; free = true;
+  redistributable = false;`) instead of `lib.licenses.unfree`. Unfree would force
+  `allowUnfree` on every user just to install a script wrapper;
+  `redistributable = false` keeps Hydra and binary caches from publishing the
+  upstream scripts, which is the actual concern.
+- The check copies the source and runs `patchShebangs bin`: the build sandbox has
+  no `/usr/bin/env`. It also runs `bash -n` on `dev/*.sh`; `dev/` is not shipped.
+- `x86_64-linux` only (the guest is x86_64 and needs KVM).
+- `keybinding = null` installs no binds file.
+
+### 9. README
+
+Add "Install on nixarchy" first: the flake input, the host module snippet below,
+the two one-time steps, the keys, where state lives, "uninstall keeps your
+images" and how to delete them, and the share warning. Replace the Arch
+`pacman` line with `nix develop` (keep the Arch line for non-Nix users).
+Document `GBOS_STATE`, `GBOS_MEM`, `GBOS_AUDIO_ARGS`, `GBOS_SHARE_ARGS`,
+`GBOS_QMP`, `GBOS_UNVERIFIED`, `SECS=0`, and the "Restart exits the VM"
+(`-no-reboot`) note.
+
+→ verify: every env var in the scripts appears in the README's table
+(`grep -o 'GBOS_[A-Z_]*' *.sh bin/* | sort -u` vs the table).
+Traps: none.
+
+### 10. Host wiring in `/etc/nixos` (separate repository)
+
+A separate change in `/etc/nixos`, which follows its own intent/spec/plan
+workflow. Open it there with this plan linked. Its content:
+
+- `flake.nix` input: `nixarchy-googlebook-vm = { url = "github:olafkfreund/nixarchy-googlebook-vm"; inputs.nixpkgs.follows = "nixpkgs"; };`
+- `hosts/common/nixos/omarchy-googlebook.nix`:
+  ```nix
+  { inputs, ... }:
+  {
+    home-manager.users.olafkfreund = { pkgs, ... }: {
+      imports = [ inputs.nixarchy-googlebook-vm.homeManagerModules.default ];
+      programs.googlebook-vm.enable = true;
+      programs.nixarchy.plugins."nixarchy.googlebook".src =
+        inputs.nixarchy-googlebook-vm.packages.${pkgs.stdenv.hostPlatform.system}.plugin;
+    };
+  }
+  ```
+  imported for p620 only.
+
+→ verify: `nixos-rebuild build --flake /etc/nixos#p620` succeeds.
+Traps: needs this branch pushed (or a `path:` input while testing). The user
+runs `switch`, not the agent. After switching, log out and in: a running session
+keeps its old `PATH`/`OMARCHY_PATH`.
+
+### 11. End to end on p620 (operator + agent)
+
+One-time: `pcall(require, "hypr.googlebook-binds")` in `~/.config/hypr/bindings.lua`,
+then `omarchy plugin enable nixarchy.googlebook`.
+
+1. `SUPER+ALT+Y` → `omarchy-shell shell isOpen nixarchy.googlebook` = `true`.
+2. `U`: setup runs with step progress. Stop it mid-download
+   (`systemctl --user stop googlebook-vm-setup`), press `U` again: it resumes.
+3. `S`: Android desktop appears; a YouTube or system sound plays on the host.
+4. Share (4a): `echo hi > ~/Googlebook/from-host.txt` shows in Android
+   Files ▸ Host. A file saved there from an Android app shows on the host
+   owned by the user (`stat -c %U`), mode readable and writable. Edits go both
+   ways. `grep -a avc logs/googlebook/serial.log | grep -i virtiofs` is empty.
+   (4b: the drive shows in Android Files; after stop, `googlebook-vm files` mounts
+   it on the host.)
+5. `X`: Android shuts down, or the power-menu message appears; status → `stopped`.
+6. `B` while running: refused. When stopped: needs `erase`.
+7. Tamper: change one byte of `modules/virtio_net.ko` in `GBOS_STATE`, delete
+   `initrd`, run setup: it fails naming the file.
+
+→ verify: each item above, with the command output pasted into the PR.
+Traps: **a 4a failure here (avc denials, files not writable) is a deviation**:
+switch to 4b, update this plan in the same commit, and say so in the PR.
+
+## Step 11 result so far (2026-10-12): blocked by host CPU
+
+The first real boot (`googlebook-vm start` on p620) panicked 0.84 s in:
+`traps: init[1] trap invalid opcode ip:2e3160` → `Kernel panic - not syncing:
+Attempted to kill init! exitcode=0x00000004` (SIGILL). The faulting bytes
+`c4 63 b5 ce` are `vgf2p8affineqb` (GFNI).
+
+`objdump -d` counts on binaries extracted from recovery build 16452207:
+
+| binary | GFNI | VAES |
+|---|---|---|
+| first-stage `/init` (init_boot ramdisk) | 40 | 38 |
+| `/system/bin/init` | 27 | 38 |
+| `/system/lib64/bootstrap/libc.so` | 13 | 0 |
+| `/system/bin/bootstrap/linker64` | 24 | 38 |
+
+The system is built with `-march` including GFNI and VAES, so swapping one binary
+cannot fix it. **The image needs a host CPU with GFNI and VAES**: Intel 11th gen
+(Tiger Lake) or newer, or AMD Zen 4 or newer. None of the user's hosts qualify:
+p620 Threadripper PRO 3995WX (Zen 2), razer i7-10875H (Comet Lake), p510 Xeon
+E5-2698 v4 (Broadwell). The user chose to finish the code and open the PR with
+step 11 marked pending GFNI hardware, and to skip step 10 for now.
+
+What step 11 did prove on p620, with the real CLI and real state:
+`setup` ran as a user unit, skipped the finished steps and created the exFAT
+drive; `files` mounted it (`/run/media/$USER/GOOGLEBOOK`) and a host file was
+written to it; `start` refused while the drive was mounted; `files --done`
+released it; `start` launched the VM unit (`status` → `running`); `kill` stopped
+it (`status` → `stopped`).
+
+### Step 6b (added after step 11 found the above, user-approved 2026-10-12)
+
+1. **CPU check.** `bin/googlebook-vm`: `cpu_ok()` is true when
+   `/proc/cpuinfo`'s first `flags` line has both `gfni` and `vaes`, or when
+   `GBOS_SKIP_CPU_CHECK=1` is set (for hosts where cpuinfo lies, for example
+   nested virtualisation). `setup` and `start` refuse with
+   `this CPU lacks GFNI/VAES, which the Googlebook image needs (Intel 11th gen+ or AMD Zen 4+)`.
+   `status` reports a new state, `unsupported-cpu`, which takes precedence over
+   every state except `running` and `setting-up`. The selftest stubs it both
+   ways (`GBOS_CPUINFO` points the check at a fake cpuinfo file).
+2. **Menu.** `Menu.qml` shows a message for `unsupported-cpu` and offers only
+   `Esc`. `L` stays available if a setup log exists.
+3. **Folder opening.** `files` and the menu's `F` use `gio open` (glib) instead
+   of `xdg-open`. Under Hyprland, `xdg-open` falls back to `$BROWSER` when the
+   folder handler fails to launch. `glib` is added to the runtime dependencies.
+4. **Guest panic.** `boot_vm.sh`'s kernel command line uses `panic=-1` instead of
+   `panic=0`. With `-no-reboot`, QEMU then exits on a guest panic, so `status`
+   reads `failed` instead of `running` forever.
+5. **`kill`.** The QMP helper discards socat's stderr for `quit`, where the
+   connection reset is expected.
+
+Verify: the selftest (now including `unsupported-cpu`), `nix flake check`,
+`qmllint`, and on p620 `googlebook-vm status` → `unsupported-cpu` and
+`googlebook-vm start` refusing with the message.
+
+### Step 6c (fixes from the independent review, 2026-10-12)
+
+The review (fresh Opus agent, plan + diff only) returned "ready after fixes".
+Each item names the finding and the chosen fix.
+
+1. **Half-built image counted as done (HIGH).** `make_lapis_security_port.py`
+   creates `googlebook-security.bin` before patching it, and the userdata
+   expansion runs afterwards, so an interrupted build leaves the final name in
+   place and `_setup` skipped step 7 on it. Fix: `build_security_image.sh`
+   removes `$OUT/.complete` before building and writes it only after
+   `expand_lapis_userdata.py` succeeds (or after the build, with `--no-copy`).
+   `_setup` skips step 7 only when `.complete` exists. With the `.bin` present
+   but no marker, step 7 fails with "incomplete image from an interrupted build:
+   run googlebook-vm rebuild". The CLI never removes it on its own, because it
+   may hold Android's data.
+2. **Retries used unverified inputs (HIGH).** A failed `verify` left modules and
+   the donor zip in place, and the `_setup` skip rules then used them. Fix:
+   `_setup` gets a step `verify downloads`, run after the fetch steps and before
+   anything uses them. It runs `verify` on the recovery `.bin`, every pinned
+   `modules/*.ko` and the donor zip. A mismatch deletes that file and fails,
+   naming it: `checksum mismatch: FILE (deleted; run setup again to download it
+   again)`. `fetch_cuttlefish_donor.sh` downloads to `$ZIP.part` and renames
+   only after curl succeeds. Step 2's skip rule is "all pinned modules present".
+   This makes step 11.7 fail as the plan expects.
+3. **`kill` did nothing without the QMP socket (MEDIUM).** `qmp` returns 1
+   instead of calling `die`. `stop` dies itself with the old message. `kill`
+   falls through to `systemctl --user stop googlebook-vm`.
+4. **A guest panic read `stopped`, not `failed` (MEDIUM).** With `-no-reboot`, a
+   guest reset is a normal QEMU exit 0 (seen under TCG: `rc=0`). Fix: `_vm`
+   writes `exit-code` to `vm.result` when the serial log of this run contains
+   `Kernel panic`. The step 6b.4 claim is corrected by this item.
+5. **QMP errors hidden (MEDIUM).** socat's stderr is discarded only for `quit`.
+6. **`S` offered while the drive is mounted on the host (MEDIUM).** Menu: `S` is
+   not offered while `share` is non-empty, and the menu shows "Shared drive is
+   open on the host: press D to release it". New key `D` runs `googlebook-vm
+   files --done` and is offered only while `share` is non-empty.
+7. **Licence metadata (LOW).** `packages.googlebook-vm` gets `free = false;`
+   (upstream has no licence, so all rights are reserved), which supersedes the
+   step 8 note. A user needs `allowUnfree` (nixarchy has
+   `programs.nixarchy.allowUnfree`) or an `allowUnfreePredicate`. The comment
+   stops claiming that `redistributable = false` keeps caches from publishing.
+8. **State paths with a space or comma (LOW).** The CLI refuses a `STATE` path
+   containing a space or a comma, with a clear message (QEMU option values
+   cannot carry them unescaped).
+
+Verify: selftest cases for 1 (`.bin` without `.complete` → step 7 fails; with
+`.complete` → skipped), 2 (a tampered pinned file → setup fails naming it, and it
+is deleted), 3 (`kill` with no socket still reaches `systemctl`), 4 (a stub serial
+log with "Kernel panic" → `failed`) and 8. Then `nix flake check` and `qmllint`.
+
+**Step 6c as implemented (deviations):**
+- With `free = false`, the flake's own nixpkgs refuses to evaluate the package,
+  and a consumer's `allowUnfree` cannot reach that instance. `forAll` therefore
+  imports nixpkgs with `allowUnfreePredicate` matching only `googlebook-vm`. Its
+  metadata still says unfree (`meta.unfree = true`; the plugin is `false`), but
+  a consumer needs no `allowUnfree`. This supersedes the "a user needs
+  `allowUnfree`" line in 6c.7.
+- `_setup` has 9 steps; "verify downloads" is step 4. `setup_die` writes
+  `setup.failed` before exiting, because `die` does not fire the ERR trap.
+- `_vm` empties `serial.log` before starting, so an old panic cannot mark a new
+  run failed.
+- The check runs `patchShebangs .` on its source copy (the selftest's `_setup`
+  cases run `prepare.sh`).
+- The image on p620 that predates the marker was marked complete by hand: its
+  build log shows the userdata expansion and `rc=0`.
+
+## Tests
+
+| command | expected |
+|---|---|
+| `nix flake check` | passes |
+| `nix build .#plugin && find result -type l` | builds; no output |
+| `omarchy plugin validate result` | valid |
+| `qmllint -I "$OMARCHY_PATH/shell" Menu.qml` | no warnings |
+| `bin/googlebook-vm-selftest` | all pass |
+| checkout `./prepare.sh` | outputs in the checkout, as before |
+| step 11 list | each item as stated |
+
+## Rollback
+
+- Code: everything is on `feat/no-issue-omarchy-plugin`. Do not merge, or
+  `git revert` the merge. The checkout scripts keep their old behaviour by
+  default, so nothing that uses them now breaks.
+- Host: remove the import from `/etc/nixos` and switch, or
+  `sudo nixos-rebuild --rollback switch`. Then `omarchy plugin disable
+  nixarchy.googlebook` and remove the `pcall` line (harmless if left).
+- Data: `~/.local/share/googlebook-vm` and `~/Googlebook` are never deleted by
+  any step. Remove them by hand if wanted.
+
+## Who does what (model split)
+
+The plan has more than three file-editing steps, so the `coder` agent
+implements steps 3-9, one step per message, on the same agent. Steps 1, 2 and 11
+need network, a 19 GB download and a real desktop; the session model and the
+operator run them. Step 10 is a separate `/etc/nixos` change. A fresh Opus
+reviewer checks `git diff` against this plan before the PR.
+
+## Outcome (2026-10-12)
+
+Steps 1-9 plus 6b and 6c are done and in PR #1. Step 10 (`/etc/nixos`) was
+deliberately skipped, and step 11 (boot) is blocked: the image needs GFNI and VAES,
+which none of the available hosts have (see "Step 11 result so far").
+
+Follow-up research:
+- No Googlebook recovery image targets older x86 CPUs. The x86 models are Intel
+  Panther Lake / Wildcat Lake; the rest are ARM (Snapdragon, MediaTek).
+- The Android 17 desktop emulator image
+  (`system-images;android-37.1;android-desktop;x86_64`, x86_64-37.1_r01.zip, SHA-1
+  `7d2d46bee15214a5e4320df2ed602773dc3fd190`) has no GFNI or VAES in `/init`,
+  `/system/bin/init`, `libc`, `linker64`, `libc++` or `surfaceflinger` (objdump
+  counts, all 0; AVX2 only, and AVX-512 only in libhwui's runtime-dispatched Skia
+  path). A boot test with the nixpkgs emulator 37.1.11 was started and abandoned at
+  the user's request before it completed. The emulator process was killed (exit 137)
+  before `sys.boot_completed`; the cause was not investigated.
+- The user chose to stop here. All downloaded and built state was deleted.

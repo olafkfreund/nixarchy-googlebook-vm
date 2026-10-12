@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# googlebook-vm: set up, run and manage the Googlebook Android VM as systemd user units.
+#   setup | start | stop | kill | status [--json] | log [setup|serial] | rebuild | files [--done]
+# Config: ${XDG_CONFIG_HOME:-~/.config}/googlebook-vm/env (GBOS_SHARE=1|0, any GBOS_* override).
+set -euo pipefail
+
+SELF=$(readlink -f "$0")
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/googlebook-vm/env
+# shellcheck disable=SC1090
+if [ -f "$CONF" ]; then set -a; . "$CONF"; set +a; fi
+GBOS_SHARE=${GBOS_SHARE:-1}
+STATE=${GBOS_STATE:-${XDG_DATA_HOME:-$HOME/.local/share}/googlebook-vm}
+LIBEXEC=${GBOS_LIBEXEC:-$(cd "$(dirname "$SELF")/.." && pwd)}
+RUN=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/googlebook-vm
+SHARE_IMG=$STATE/shared.img
+mkdir -p "$RUN"; chmod 0700 "$RUN"
+mkdir -p "$STATE"
+case "$STATE" in *[[:space:],]*) echo "googlebook-vm: state path must not contain spaces or commas: $STATE" >&2; exit 1 ;; esac
+export GBOS_STATE=$STATE GBOS_LIBEXEC=$LIBEXEC
+
+die() { echo "googlebook-vm: $*" >&2; exit 1; }
+active() { systemctl --user is-active --quiet "$1"; }
+usage() {
+  echo "usage: googlebook-vm setup|start|stop|kill|status [--json]|log [setup|serial]|rebuild|files [--done]" >&2
+  exit 2
+}
+
+qmp() { # qmp CMD...: send each command on the VM's QMP socket
+  [ -S "$RUN/qmp.sock" ] || return 1
+  local c err
+  for c in "$@"; do
+    err=/dev/stderr; [ "$c" = quit ] && err=/dev/null # the connection reset after quit is expected
+    printf '{"execute":"qmp_capabilities"}\n{"execute":"%s"}\n' "$c" | socat -t 1 - "UNIX-CONNECT:$RUN/qmp.sock" >/dev/null 2>"$err" || return 1
+  done
+}
+
+loops() { losetup -j "$SHARE_IMG" 2>/dev/null | cut -d: -f1; }
+share_path() { # mount point of the shared drive while the host has it mounted
+  local d
+  for d in $(loops); do findmnt -rn -o TARGET -S "$d" | head -n1; done | head -n1
+}
+
+# Run an inner command as a transient user unit that logs to $STATE/setup.log.
+setup_unit() {
+  rm -f "$STATE/setup.ok" "$STATE/setup.failed"
+  systemd-run --user --unit=googlebook-vm-setup --collect \
+    -p "StandardOutput=append:$STATE/setup.log" -p "StandardError=append:$STATE/setup.log" \
+    --setenv=GBOS_STATE="$STATE" --setenv=GBOS_LIBEXEC="$LIBEXEC" --setenv=PATH="$PATH" \
+    "$SELF" "$1"
+}
+
+# The image is compiled for GFNI and VAES and dies at the first instruction without them.
+cpu_ok() {
+  [ "${GBOS_SKIP_CPU_CHECK:-0}" = 1 ] && return 0
+  local flags
+  flags=$(grep -m1 '^flags' "${GBOS_CPUINFO:-/proc/cpuinfo}" 2>/dev/null) || return 1
+  grep -qw gfni <<<"$flags" && grep -qw vaes <<<"$flags"
+}
+need_cpu() {
+  cpu_ok || die "this CPU lacks GFNI/VAES, which the Googlebook image needs (Intel 11th gen+ or AMD Zen 4+)"
+}
+
+busy_check() {
+  if active googlebook-vm; then die "the VM is running"; fi
+  if active googlebook-vm-setup; then die "setup is already running"; fi
+}
+
+# Bookkeeping shared by _setup and _rebuild: clear markers, record the failing step.
+begin() { rm -f "$STATE/setup.ok" "$STATE/setup.failed"; trap 'cp -f "$STATE/setup.step" "$STATE/setup.failed"' ERR; set -E; }
+step() { echo "$1" > "$STATE/setup.step"; echo "== $1"; }
+run_script() { "$LIBEXEC/$1" "${@:2}"; }
+
+# Like die, but also records the failing step (die's exit does not fire the ERR trap).
+setup_die() { echo "googlebook-vm: $*" >&2; cp -f "$STATE/setup.step" "$STATE/setup.failed"; exit 1; }
+
+pinned_modules() { awk '$2 ~ /^modules\//{print $2}' "$LIBEXEC/checksums.sha256"; }
+
+# Delete a downloaded file that fails its pin, so a retry downloads it again.
+vfy() {
+  [ -f "$1" ] || return 0
+  verify "$1" 2>/dev/null || { rm -f "$1"; setup_die "checksum mismatch: $1 (deleted; run setup again to download it again)"; }
+}
+
+cmd_setup_steps() {
+  begin
+  # shellcheck disable=SC2034 # lib.sh reads HERE
+  HERE=$LIBEXEC
+  # shellcheck source=/dev/null
+  . "$LIBEXEC/lib.sh"
+  local raw=$STATE/android-desktop_signed_recovery_image.bin donor_zip=$STATE/aosp_cf_x86_64_only_phone-img-16373615.zip
+  local m all_modules=1 img=$STATE/image-security/googlebook-security.bin
+  step "1/9 recovery image"; [ -f "$raw" ] || run_script fetch_recovery_image.sh
+  for m in $(pinned_modules); do [ -f "$STATE/$m" ] || all_modules=0; done
+  step "2/9 kernel modules"; [ "$all_modules" = 1 ] || run_script fetch_kernel_modules.sh
+  step "3/9 donor download"; [ -f "$donor_zip" ] || [ -f "$STATE/donor/keymint-service" ] || run_script fetch_cuttlefish_donor.sh 16373615
+  step "4/9 verify downloads"
+  vfy "$raw"
+  for m in $(pinned_modules); do vfy "$STATE/$m"; done
+  vfy "$donor_zip"
+  step "5/9 donor unpack"; [ -f "$STATE/donor/keymint-service" ] || python3 "$LIBEXEC/unpack_cuttlefish_donor.py" "$donor_zip" "$STATE/donor"
+  step "6/9 boot images"; run_script prepare.sh
+  step "7/9 guest graphics"
+  { [ -f "$STATE/guest-mesa/libvulkan_virtio.so" ] && [ -f "$STATE/guest-mesa/gl/libEGL_virgl.so" ]; } || run_script build_guest_mesa.sh
+  step "8/9 Android image"
+  if [ -f "$STATE/image-security/.complete" ]; then :
+  elif [ -f "$img" ]; then setup_die "incomplete image from an interrupted build: run googlebook-vm rebuild"
+  else run_script build_security_image.sh
+  fi
+  step "9/9 shared drive"
+  if [ "$GBOS_SHARE" = 1 ] && [ ! -f "$SHARE_IMG" ]; then
+    truncate -s 16G "$SHARE_IMG.part"
+    mkfs.exfat -L GOOGLEBOOK "$SHARE_IMG.part"
+    mv "$SHARE_IMG.part" "$SHARE_IMG"
+  fi
+  touch "$STATE/setup.ok"
+}
+
+cmd_rebuild_steps() {
+  begin
+  step "1/1 rebuild Android image (erases data)"
+  GBOS_FORCE=1 run_script build_security_image.sh
+  touch "$STATE/setup.ok"
+}
+
+# Runs inside the VM unit: records how the VM ended so `status` can report "failed".
+cmd_vm() {
+  local rc=0 share_args=""
+  rm -f "$STATE/vm.result"
+  mkdir -p "$STATE/logs/googlebook"; : > "$STATE/logs/googlebook/serial.log" # a panic from an older run must not count
+  if [ "$GBOS_SHARE" = 1 ] && [ -f "$SHARE_IMG" ]; then
+    share_args="-drive if=none,id=usbshare,format=raw,file=$SHARE_IMG -device usb-storage,bus=xhci.0,drive=usbshare"
+  fi
+  GBOS_QMP=$RUN/qmp.sock GBOS_SHARE_ARGS=${GBOS_SHARE_ARGS:-$share_args} \
+    "$LIBEXEC/boot_vm.sh" "$STATE" googlebook 0 || rc=$?
+  if [ "$rc" = 0 ] && grep -aq 'Kernel panic' "$STATE/logs/googlebook/serial.log"; then rc=1; fi
+  if [ "$rc" = 0 ]; then echo success > "$STATE/vm.result"; else echo exit-code > "$STATE/vm.result"; fi
+  exit "$rc"
+}
+
+cmd_start() {
+  need_cpu
+  [ -f "$STATE/setup.ok" ] || die "not set up: run 'googlebook-vm setup' first"
+  busy_check
+  [ -z "$(loops)" ] || die "the shared drive is mounted on the host: run 'googlebook-vm files --done' first"
+  local env=() v
+  for v in WAYLAND_DISPLAY DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE; do
+    [ -z "${!v:-}" ] || env+=("--setenv=$v=${!v}")
+  done
+  systemd-run --user --unit=googlebook-vm --collect \
+    -p "StandardOutput=append:$STATE/vm.log" -p "StandardError=append:$STATE/vm.log" \
+    --setenv=GBOS_STATE="$STATE" --setenv=GBOS_LIBEXEC="$LIBEXEC" --setenv=PATH="$PATH" "${env[@]}" \
+    "$SELF" _vm
+}
+
+cmd_stop() {
+  active googlebook-vm || die "not running"
+  qmp system_powerdown || die "VM control socket missing or not answering"
+  for _ in $(seq 60); do
+    active googlebook-vm || return 0
+    sleep 1
+  done
+  echo "Android may be showing its power menu: choose Power off, or run googlebook-vm kill" >&2
+  exit 1
+}
+
+cmd_kill() {
+  qmp stop || true
+  qmp quit || true
+  if active googlebook-vm; then systemctl --user stop googlebook-vm; fi
+}
+
+state() {
+  if active googlebook-vm; then echo running
+  elif active googlebook-vm-setup; then echo setting-up
+  elif ! cpu_ok; then echo unsupported-cpu
+  elif [ -f "$STATE/setup.failed" ]; then echo setup-failed
+  elif [ ! -f "$STATE/setup.ok" ]; then echo unconfigured
+  elif [ -f "$STATE/vm.result" ] && [ "$(cat "$STATE/vm.result")" != success ]; then echo failed
+  else echo stopped
+  fi
+}
+
+cmd_status() {
+  local s step="" share="" mode=off log
+  s=$(state)
+  if [ -f "$STATE/setup.step" ]; then step=$(cat "$STATE/setup.step"); fi
+  if [ "$GBOS_SHARE" = 1 ]; then mode=usb; fi
+  share=$(share_path || true)
+  if [ "$s" = running ]; then log=$STATE/logs/googlebook/serial.log; else log=$STATE/setup.log; fi
+  if [ "${1:-}" = --json ]; then
+    jq -nc --arg state "$s" --arg step "$step" --arg share "$share" --arg shareMode "$mode" \
+      --arg log "$log" --arg state_dir "$STATE" \
+      '{state:$state,step:$step,share:$share,shareMode:$shareMode,log:$log,state_dir:$state_dir}'
+  else
+    echo "$s${step:+ ($step)}"
+  fi
+}
+
+cmd_log() {
+  local f
+  case "${1:-setup}" in
+    setup) f=$STATE/setup.log ;;
+    serial) f=$STATE/logs/googlebook/serial.log ;;
+    *) usage ;;
+  esac
+  [ -f "$f" ] || die "no log yet: $f"
+  if [ -n "${TERMINAL:-}" ]; then setsid -f "$TERMINAL" -e less +F "$f"; else setsid -f xdg-terminal-exec less +F "$f"; fi
+}
+
+cmd_files() {
+  local d out
+  if [ "${1:-}" = --done ]; then
+    for d in $(loops); do
+      udisksctl unmount --no-user-interaction -b "$d" || true
+      udisksctl loop-delete --no-user-interaction -b "$d"
+    done
+    return 0
+  fi
+  if active googlebook-vm; then die "the VM is running: stop it first (one filesystem must not be mounted twice)"; fi
+  [ -f "$SHARE_IMG" ] || die "no shared drive (GBOS_SHARE=0, or setup is not finished)"
+  d=$(loops | head -n1)
+  if [ -z "$d" ]; then
+    out=$(udisksctl loop-setup --no-user-interaction -f "$SHARE_IMG")
+    d=$(grep -o '/dev/loop[0-9]*' <<<"$out" | head -n1)
+    [ -n "$d" ] || die "could not parse loop device from: $out"
+  fi
+  if [ -z "$(share_path)" ]; then udisksctl mount --no-user-interaction -b "$d" >/dev/null; fi
+  out=$(share_path)
+  [ -n "$out" ] || die "shared drive did not mount"
+  echo "$out"
+  gio open "$out" >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+  setup) need_cpu; busy_check; setup_unit _setup ;;
+  rebuild) need_cpu; busy_check; setup_unit _rebuild ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  kill) cmd_kill ;;
+  status) cmd_status "${2:-}" ;;
+  log) cmd_log "${2:-}" ;;
+  files) cmd_files "${2:-}" ;;
+  _setup) cmd_setup_steps ;;
+  _rebuild) cmd_rebuild_steps ;;
+  _vm) cmd_vm ;;
+  *) usage ;;
+esac

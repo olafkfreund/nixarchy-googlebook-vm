@@ -12,11 +12,12 @@
 # Re-runnable; needs access to ci.android.com.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+. "$HERE/lib.sh"
 BUILD="${1:-16302624}"
 TARGET="${2:-kernel_virt_x86_64}"
-OUT="${3:-$HERE/modules}"
+OUT="${3:-$STATE/modules}"
 mkdir -p "$OUT"
-exec python3 - "$BUILD" "$TARGET" "$OUT" <<'PY'
+python3 - "$BUILD" "$TARGET" "$OUT" <<'PY'
 import io
 import json
 import re
@@ -80,7 +81,10 @@ if m:
         if v and v not in tokens:
             tokens.append(v.rsplit('/', 1)[-1])
 if not tokens:
-    sys.exit(f'no artifacts found on {base} (is the build/target correct?)')
+    # The build page is now rendered client-side and lists nothing; each artifact's
+    # own page still resolves, so ask for the wanted modules by name.
+    print('  build page lists no artifacts; resolving each module by name')
+    tokens = list(want)
 
 def token_for(name):
     return next((t for t in tokens if t.rsplit('/', 1)[-1] == name), None)
@@ -126,3 +130,4 @@ if remaining:
     sys.exit('missing modules: ' + ', '.join(sorted(remaining)))
 print(f'done: {len(want)} modules in {out}')
 PY
+for f in "$OUT"/*.ko; do verify "$f"; done

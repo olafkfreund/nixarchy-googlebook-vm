@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "nixarchy.googlebook",
+  "name": "Googlebook VM",
+  "version": "1.0.0",
+  "author": "olafkfreund",
+  "license": "MIT",
+  "description": "Set up, start and stop the Googlebook Android VM",
+  "homepage": "https://github.com/olafkfreund/nixarchy-googlebook-vm",
+  "kinds": ["menu"],
+  "entryPoints": {
+    "menu": "Menu.qml"
+  },
+  "keepLoaded": true
+}

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Self-test for googlebook-vm: status and error paths against stub systemctl/losetup/udisksctl.
+set -euo pipefail
+CLI=$(cd "$(dirname "$0")" && pwd)/googlebook-vm
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+mkdir -p "$T/bin" "$T/run" "$T/state" "$T/cfg/googlebook-vm" "$T/home"
+# The systemctl stub records its calls; `is-active` answers 0 only while $T/active exists.
+cat > "$T/bin/systemctl" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/../calls"
+if [ "$2" = is-active ]; then [ -e "$(dirname "$0")/../active" ] && exit 0; exit 3; fi
+exit 0
+STUB
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/losetup"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/udisksctl"
+chmod +x "$T/bin/"*
+echo "flags : fpu gfni vaes avx2" > "$T/cpuinfo"
+export PATH=$T/bin:$PATH XDG_RUNTIME_DIR=$T/run XDG_CONFIG_HOME=$T/cfg HOME=$T/home GBOS_STATE=$T/state GBOS_CPUINFO=$T/cpuinfo
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+field() { "$CLI" status --json | jq -r ".$1"; }
+expect() { # expect NAME FIELD WANTED
+  local got; got=$(field "$2")
+  [ "$got" = "$3" ] || fail "$1: .$2 was '$got', wanted '$3'"
+  echo "ok   $1"
+}
+
+expect "empty state is unconfigured" state unconfigured
+touch "$T/state/setup.ok"
+expect "setup.ok is stopped" state stopped
+echo exit-code > "$T/state/vm.result"
+expect "bad vm.result is failed" state failed
+rm "$T/state/vm.result" "$T/state/setup.ok"
+echo "7/8 Android image" > "$T/state/setup.failed"
+expect "setup.failed is setup-failed" state setup-failed
+expect "shareMode defaults to usb" shareMode usb
+echo GBOS_SHARE=0 > "$T/cfg/googlebook-vm/env"
+expect "GBOS_SHARE=0 gives shareMode off" shareMode off
+rc=0; "$CLI" nonsense 2>/dev/null || rc=$?
+[ "$rc" = 2 ] || fail "unknown command exited $rc, wanted 2"
+echo "ok   unknown command exits 2"
+
+echo "flags : fpu avx2 vaes" > "$T/cpuinfo"
+expect "CPU without GFNI is unsupported-cpu" state unsupported-cpu
+GBOS_SKIP_CPU_CHECK=1 expect "GBOS_SKIP_CPU_CHECK=1 overrides" state setup-failed
+for c in start setup rebuild; do
+  rc=0; out=$("$CLI" "$c" 2>&1) || rc=$?
+  [ "$rc" = 1 ] && [[ $out == *"lacks GFNI/VAES"* ]] || fail "$c on an unsupported CPU: rc=$rc out=$out"
+  echo "ok   $c refuses on an unsupported CPU"
+done
+
+# --- step 6c cases ---
+echo "flags : fpu gfni vaes" > "$T/cpuinfo"
+real=$(cd "$(dirname "$CLI")/.." && pwd)
+mkdir -p "$T/stub"
+inputs() { # inputs DIR: every download _setup looks at, as junk files
+  local d=$1 m
+  mkdir -p "$d/modules" "$d/donor" "$d/firmware" "$d/guest-mesa/gl" "$d/image-security"
+  echo junk > "$d/android-desktop_signed_recovery_image.bin"
+  while read -r m; do echo junk > "$d/$m"; done < <(awk '$2 ~ /^modules\//{print $2}' "$real/checksums.sha256")
+  echo junk > "$d/aosp_cf_x86_64_only_phone-img-16373615.zip"
+  touch "$d/donor/keymint-service" "$d/firmware/kernel" "$d/initrd" "$d/guest-mesa/libvulkan_virtio.so" "$d/guest-mesa/gl/libEGL_virgl.so"
+}
+
+# 2: a tampered pinned file fails setup, names the file and is deleted
+S2=$T/s2; inputs "$S2"
+rc=0; out=$(GBOS_STATE=$S2 "$CLI" _setup 2>&1) || rc=$?
+[ "$rc" != 0 ] && [[ $out == *"checksum mismatch: $S2/android-desktop_signed_recovery_image.bin"* ]] || fail "tampered file: rc=$rc out=$out"
+[ ! -e "$S2/android-desktop_signed_recovery_image.bin" ] || fail "tampered file was not deleted"
+[ -f "$S2/setup.failed" ] || fail "no setup.failed after a verify failure"
+echo "ok   a tampered download fails setup, is named and deleted"
+
+# 1: an image without .complete fails step 8; with .complete it is skipped
+S1=$T/s1; inputs "$S1"; touch "$S1/image-security/googlebook-security.bin"
+rc=0; out=$(GBOS_UNVERIFIED=1 GBOS_SHARE=0 GBOS_STATE=$S1 "$CLI" _setup 2>&1) || rc=$?
+[ "$rc" != 0 ] && [[ $out == *"incomplete image"* ]] || fail "image without .complete: rc=$rc out=$out"
+echo "ok   an image without .complete fails step 8"
+touch "$S1/image-security/.complete"
+GBOS_UNVERIFIED=1 GBOS_SHARE=0 GBOS_STATE=$S1 "$CLI" _setup >/dev/null 2>&1 || fail "image with .complete did not pass"
+[ -f "$S1/setup.ok" ] || fail "no setup.ok after a complete setup"
+echo "ok   an image with .complete is skipped"
+
+# 3: a force stop without a QMP socket still reaches systemctl
+: > "$T/calls"; touch "$T/active"
+"$CLI" kill 2>/dev/null || fail "kill without a socket failed"
+grep -q -- "--user stop googlebook-vm" "$T/calls" || fail "kill did not reach systemctl: $(cat "$T/calls")"
+rm "$T/active"
+echo "ok   kill without a socket still stops the unit"
+
+# 4: a panic in this run's serial log is a failure; an older one is not
+# shellcheck disable=SC2016 # the stub script body must stay unexpanded
+printf '#!/bin/sh\nmkdir -p "$1/logs/googlebook"\n[ -z "$PANIC" ] || echo "Kernel panic - not syncing" >> "$1/logs/googlebook/serial.log"\n' > "$T/stub/boot_vm.sh"
+chmod +x "$T/stub/boot_vm.sh"
+S4=$T/s4; mkdir -p "$S4/logs/googlebook"
+echo "Kernel panic - old run" > "$S4/logs/googlebook/serial.log"
+PANIC="" GBOS_STATE=$S4 GBOS_LIBEXEC=$T/stub "$CLI" _vm || fail "_vm failed on a clean run"
+[ "$(cat "$S4/vm.result")" = success ] || fail "an old panic marked a new run failed"
+PANIC=1 GBOS_STATE=$S4 GBOS_LIBEXEC=$T/stub "$CLI" _vm || true
+[ "$(cat "$S4/vm.result")" = exit-code ] || fail "a panic did not write exit-code"
+echo "ok   a panic in this run's serial log is a failure"
+
+# 8: a state path with a space is refused
+rc=0; GBOS_STATE="$T/a b" "$CLI" status >/dev/null 2>&1 || rc=$?
+[ "$rc" = 1 ] || fail "state path with a space exited $rc, wanted 1"
+echo "ok   a state path with a space is refused"

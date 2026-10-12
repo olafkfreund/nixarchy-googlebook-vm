@@ -313,6 +313,7 @@ def main():
     ap.add_argument('--donor', default=str(ROOT / 'donor'))
     ap.add_argument('--out', default=str(ROOT / 'image-security'))
     ap.add_argument('--initrd', default=str(ROOT / 'initrd'))
+    ap.add_argument('--firmware', default=str(ROOT / 'firmware'))
     ap.add_argument('--image-name', default='googlebook-security.bin')
     ap.add_argument('--locksettings', action='store_true')
     ap.add_argument('--quiet-absent-hardware', action='store_true')
@@ -334,7 +335,7 @@ def main():
 
     raw, donor, out = Path(a.raw), Path(a.donor), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    gpt = json.loads((ROOT / 'firmware' / 'gpt.json').read_text())
+    gpt = json.loads((Path(a.firmware) / 'gpt.json').read_text())
     super_base, super_end = gpt['super']
 
     need = ['keymint-service'] + [f'vintf/android.hardware.security.{n}-service.xml' for n in VINTF]
