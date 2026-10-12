@@ -28,7 +28,7 @@ qmp() { # qmp CMD...: send each command on the VM's QMP socket
   [ -S "$RUN/qmp.sock" ] || die "VM control socket missing: is the VM running?"
   local c
   for c in "$@"; do
-    printf '{"execute":"qmp_capabilities"}\n{"execute":"%s"}\n' "$c" | socat -t 1 - "UNIX-CONNECT:$RUN/qmp.sock" >/dev/null
+    printf '{"execute":"qmp_capabilities"}\n{"execute":"%s"}\n' "$c" | socat -t 1 - "UNIX-CONNECT:$RUN/qmp.sock" >/dev/null 2>/dev/null
   done
 }
 
@@ -45,6 +45,17 @@ setup_unit() {
     -p "StandardOutput=append:$STATE/setup.log" -p "StandardError=append:$STATE/setup.log" \
     --setenv=GBOS_STATE="$STATE" --setenv=GBOS_LIBEXEC="$LIBEXEC" --setenv=PATH="$PATH" \
     "$SELF" "$1"
+}
+
+# The image is compiled for GFNI and VAES and dies at the first instruction without them.
+cpu_ok() {
+  [ "${GBOS_SKIP_CPU_CHECK:-0}" = 1 ] && return 0
+  local flags
+  flags=$(grep -m1 '^flags' "${GBOS_CPUINFO:-/proc/cpuinfo}" 2>/dev/null) || return 1
+  grep -qw gfni <<<"$flags" && grep -qw vaes <<<"$flags"
+}
+need_cpu() {
+  cpu_ok || die "this CPU lacks GFNI/VAES, which the Googlebook image needs (Intel 11th gen+ or AMD Zen 4+)"
 }
 
 busy_check() {
@@ -99,6 +110,7 @@ cmd_vm() {
 }
 
 cmd_start() {
+  need_cpu
   [ -f "$STATE/setup.ok" ] || die "not set up: run 'googlebook-vm setup' first"
   busy_check
   [ -z "$(loops)" ] || die "the shared drive is mounted on the host: run 'googlebook-vm files --done' first"
@@ -131,6 +143,7 @@ cmd_kill() {
 state() {
   if active googlebook-vm; then echo running
   elif active googlebook-vm-setup; then echo setting-up
+  elif ! cpu_ok; then echo unsupported-cpu
   elif [ -f "$STATE/setup.failed" ]; then echo setup-failed
   elif [ ! -f "$STATE/setup.ok" ]; then echo unconfigured
   elif [ -f "$STATE/vm.result" ] && [ "$(cat "$STATE/vm.result")" != success ]; then echo failed
@@ -186,12 +199,12 @@ cmd_files() {
   out=$(share_path)
   [ -n "$out" ] || die "shared drive did not mount"
   echo "$out"
-  xdg-open "$out" >/dev/null 2>&1 || true
+  gio open "$out" >/dev/null 2>&1 || true
 }
 
 case "${1:-}" in
-  setup) busy_check; setup_unit _setup ;;
-  rebuild) busy_check; setup_unit _rebuild ;;
+  setup) need_cpu; busy_check; setup_unit _setup ;;
+  rebuild) need_cpu; busy_check; setup_unit _rebuild ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
   kill) cmd_kill ;;

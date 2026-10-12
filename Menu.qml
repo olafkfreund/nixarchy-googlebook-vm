@@ -57,7 +57,7 @@ Item {
 
   // Which keys are offered in the current state. Keys and buttons share this.
   function can(k) {
-    if (root.notFound) return false
+    if (root.notFound || root.vmState === "unsupported-cpu") return false
     var s = root.vmState
     switch (k) {
     case "U": return s === "unconfigured" || s === "setup-failed"
@@ -88,7 +88,7 @@ Item {
         killTimer.restart()
       }
       return
-    case "F": Quickshell.execDetached(["xdg-open", root.share]); close(); return
+    case "F": Quickshell.execDetached(["gio", "open", root.share]); close(); return
     case "L":
       Quickshell.execDetached(["googlebook-vm", "log", root.vmState === "running" ? "serial" : "setup"])
       close()
@@ -106,6 +106,7 @@ Item {
   function subtitle() {
     if (root.notFound) return "googlebook-vm not found"
     switch (root.vmState) {
+    case "unsupported-cpu": return "Unsupported CPU"
     case "unconfigured": return "Not set up"
     case "setting-up": return "Setting up" + (root.step !== "" ? "  •  " + root.step : "")
     case "setup-failed": return "Setup failed" + (root.step !== "" ? "  •  " + root.step : "")
@@ -298,6 +299,16 @@ Item {
             visible: root.notFound
             width: parent.width
             text: "googlebook-vm not found: enable programs.googlebook-vm"
+            color: root.foreground
+            wrapMode: Text.Wrap
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            visible: root.vmState === "unsupported-cpu"
+            width: parent.width
+            text: "This CPU can't run the Googlebook image: it needs GFNI and VAES (Intel 11th gen or newer, AMD Zen 4 or newer)."
             color: root.foreground
             wrapMode: Text.Wrap
             font.family: Style.font.family

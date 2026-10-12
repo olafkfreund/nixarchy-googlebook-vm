@@ -9,7 +9,8 @@ printf '#!/bin/sh\n[ "$2" = is-active ] && exit 3\nexit 0\n' > "$T/bin/systemctl
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/losetup"
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/udisksctl"
 chmod +x "$T/bin/"*
-export PATH=$T/bin:$PATH XDG_RUNTIME_DIR=$T/run XDG_CONFIG_HOME=$T/cfg HOME=$T/home GBOS_STATE=$T/state
+echo "flags : fpu gfni vaes avx2" > "$T/cpuinfo"
+export PATH=$T/bin:$PATH XDG_RUNTIME_DIR=$T/run XDG_CONFIG_HOME=$T/cfg HOME=$T/home GBOS_STATE=$T/state GBOS_CPUINFO=$T/cpuinfo
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 field() { "$CLI" status --json | jq -r ".$1"; }
@@ -33,3 +34,12 @@ expect "GBOS_SHARE=0 gives shareMode off" shareMode off
 rc=0; "$CLI" nonsense 2>/dev/null || rc=$?
 [ "$rc" = 2 ] || fail "unknown command exited $rc, wanted 2"
 echo "ok   unknown command exits 2"
+
+echo "flags : fpu avx2 vaes" > "$T/cpuinfo"
+expect "CPU without GFNI is unsupported-cpu" state unsupported-cpu
+GBOS_SKIP_CPU_CHECK=1 expect "GBOS_SKIP_CPU_CHECK=1 overrides" state setup-failed
+for c in start setup rebuild; do
+  rc=0; out=$("$CLI" "$c" 2>&1) || rc=$?
+  [ "$rc" = 1 ] && [[ $out == *"lacks GFNI/VAES"* ]] || fail "$c on an unsupported CPU: rc=$rc out=$out"
+  echo "ok   $c refuses on an unsupported CPU"
+done

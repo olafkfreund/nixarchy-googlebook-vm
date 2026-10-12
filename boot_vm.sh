@@ -51,7 +51,7 @@ fi
 
 LOG=$X/logs/$NAME; mkdir -p "$LOG"
 
-CMD="console=ttyS0,115200 earlycon=uart8250,io,0x3f8,115200 panic=0 root=/dev/ram0 loglevel=7 \
+CMD="console=ttyS0,115200 earlycon=uart8250,io,0x3f8,115200 panic=-1 root=/dev/ram0 loglevel=7 \
 8250.nr_uarts=4 console_msg_format=syslog log_buf_len=1M cgroup_disable=pressure firmware_class.path=/vendor/firmware \
 binder.impl=rust ia32_emulation=false vsyscall=none printk.devkmsg=on \
 androidboot.hardware=android-desktop androidboot.hardware.platform=android-desktop androidboot.slot_suffix=_a \

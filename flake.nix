@@ -48,7 +48,7 @@
           file
           systemd
           udisks
-          xdg-utils
+          glib
           less
         ];
     in
