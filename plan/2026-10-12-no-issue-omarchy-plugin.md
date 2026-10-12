@@ -127,6 +127,67 @@ Record the result **in this file** under a new `## Step 2 result` heading:
 path is stated.
 Traps: do not boot anything yet. The runtime proof is step 11.
 
+## Step 2 result (2026-10-12): USB fallback (step 4b)
+
+`dev/probe-guest.sh` on recovery build `lapis-user/16452207`, kernel
+`6.18.21-android17-5-g3938c8d97142-ab16302624`:
+
+```
+== (a) kernel
+CONFIG_VIRTIO_FS=y
+CONFIG_FUSE_FS=y
+# CONFIG_SND_VIRTIO is not set
+CONFIG_USB_STORAGE=y
+CONFIG_EXFAT_FS=y
+== (b) vendor SELinux policy
+vendor_a at 6288310272; precompiled_sepolicy 951518 bytes
+-- genfscon for virtiofs:
+(none)
+virtiofs label: (none: files would be unlabeled)
+ok   init may mount the virtiofs fs
+ok   init may relabel from the virtiofs label
+MISS init may relabel to media_rw_data_file
+MISS media_rw_data_file may live on that fs
+MISS init may mount on media_rw_data_file dirs
+== result
+USB fallback: kernel_ok=1 policy_ok=0 (plan step 4b)
+```
+
+Controls, run separately to show the queries work: `init` → `tmpfs`
+`filesystem mount` is found. The only `relabelto` targets init has are the
+`contextmount_type` attribute (`app_fusefs`, `oemfs`) and three vendor
+mount-point types. `oemfs` gives apps read and execute but not write, and it is
+outside shared storage, so it is no substitute. The USB path is allowed:
+`genfscon vfat` and `exfat` exist, and `vold` may mount `sdcard_type`
+(`exfat fuseblk sdcardfs vfat`).
+
+**Decision: step 4b.** A live share would need a vendor sepolicy change
+(a `genfscon virtiofs` label plus init `relabelto`/`mounton` on
+`media_rw_data_file`), which this plan rules out. That is a candidate follow-up
+task, not part of this one.
+
+Consequences for later steps:
+- Step 4 does only its "Common" part. No `--hostshare` flag, no rc file, and
+  `build_security_image.sh` gets only `--firmware`.
+- Step 6 implements only the USB branch of `start` and the `files` command.
+  `shareMode` is `usb` (or `off` when `sharedDir` is null). `virtiofsd` is not
+  a runtime dependency (step 8).
+- Step 6 `files` mounts the drive with `udisksctl` (no root), which puts it at
+  `/run/media/$USER/GOOGLEBOOK`; a chosen directory would need root. `files`
+  then opens that path with `xdg-open`, and `files --done` unmounts it and
+  detaches the loop device. `status --json` reports `share` = that path while
+  it is mounted, else `""`. So the menu's `F` (offered when `share` is non-empty)
+  opens the mounted drive. While the drive is mounted on the host, `start`
+  refuses: one filesystem must never be mounted by two kernels.
+- Step 8's Home Manager option `sharedDir` becomes `sharedDrive` (bool, default
+  `true`), written as `GBOS_SHARE=1|0` in `~/.config/googlebook-vm/env`. There is
+  no host directory to create, so `home.activation` is dropped. The `$HOME`
+  warning no longer applies: the drive holds only what the user copies onto it.
+- If vold rejects exFAT at step 11, switch `mkfs.exfat` to `mkfs.vfat -F 32`
+  (4 GiB file limit) and record it here.
+- `CONFIG_SND_VIRTIO` is not built in, so the `virtio_snd.ko` added in step 4 is
+  required. Its build id `ab16302624` matches the kernel.
+
 ### 3. Scripts: `GBOS_STATE` and checksum verification
 
 - New `lib.sh` (sourced): `STATE=${GBOS_STATE:-$HERE}` and
