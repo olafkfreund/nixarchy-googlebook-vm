@@ -514,6 +514,61 @@ then `omarchy plugin enable nixarchy.googlebook`.
 Traps: **a 4a failure here (avc denials, files not writable) is a deviation**:
 switch to 4b, update this plan in the same commit, and say so in the PR.
 
+## Step 11 result so far (2026-10-12): blocked by host CPU
+
+The first real boot (`googlebook-vm start` on p620) panicked 0.84 s in:
+`traps: init[1] trap invalid opcode ip:2e3160` → `Kernel panic - not syncing:
+Attempted to kill init! exitcode=0x00000004` (SIGILL). The faulting bytes
+`c4 63 b5 ce` are `vgf2p8affineqb` (GFNI).
+
+`objdump -d` counts on binaries extracted from recovery build 16452207:
+
+| binary | GFNI | VAES |
+|---|---|---|
+| first-stage `/init` (init_boot ramdisk) | 40 | 38 |
+| `/system/bin/init` | 27 | 38 |
+| `/system/lib64/bootstrap/libc.so` | 13 | 0 |
+| `/system/bin/bootstrap/linker64` | 24 | 38 |
+
+The system is built with `-march` including GFNI and VAES, so swapping one binary
+cannot fix it. **The image needs a host CPU with GFNI and VAES**: Intel 11th gen
+(Tiger Lake) or newer, or AMD Zen 4 or newer. None of the user's hosts qualify:
+p620 Threadripper PRO 3995WX (Zen 2), razer i7-10875H (Comet Lake), p510 Xeon
+E5-2698 v4 (Broadwell). The user chose to finish the code and open the PR with
+step 11 marked pending GFNI hardware, and to skip step 10 for now.
+
+What step 11 did prove on p620, with the real CLI and real state:
+`setup` ran as a user unit, skipped the finished steps and created the exFAT
+drive; `files` mounted it (`/run/media/$USER/GOOGLEBOOK`) and a host file was
+written to it; `start` refused while the drive was mounted; `files --done`
+released it; `start` launched the VM unit (`status` → `running`); `kill` stopped
+it (`status` → `stopped`).
+
+### Step 6b (added after step 11 found the above, user-approved 2026-10-12)
+
+1. **CPU check.** `bin/googlebook-vm`: `cpu_ok()` is true when
+   `/proc/cpuinfo`'s first `flags` line has both `gfni` and `vaes`, or when
+   `GBOS_SKIP_CPU_CHECK=1` is set (for hosts where cpuinfo lies, for example
+   nested virtualisation). `setup` and `start` refuse with
+   `this CPU lacks GFNI/VAES, which the Googlebook image needs (Intel 11th gen+ or AMD Zen 4+)`.
+   `status` reports a new state, `unsupported-cpu`, which takes precedence over
+   every state except `running` and `setting-up`. The selftest stubs it both
+   ways (`GBOS_CPUINFO` points the check at a fake cpuinfo file).
+2. **Menu.** `Menu.qml` shows a message for `unsupported-cpu` and offers only
+   `Esc`. `L` stays available if a setup log exists.
+3. **Folder opening.** `files` and the menu's `F` use `gio open` (glib) instead
+   of `xdg-open`. Under Hyprland, `xdg-open` falls back to `$BROWSER` when the
+   folder handler fails to launch. `glib` is added to the runtime dependencies.
+4. **Guest panic.** `boot_vm.sh`'s kernel command line uses `panic=-1` instead of
+   `panic=0`. With `-no-reboot`, QEMU then exits on a guest panic, so `status`
+   reads `failed` instead of `running` forever.
+5. **`kill`.** The QMP helper discards socat's stderr for `quit`, where the
+   connection reset is expected.
+
+Verify: the selftest (now including `unsupported-cpu`), `nix flake check`,
+`qmllint`, and on p620 `googlebook-vm status` → `unsupported-cpu` and
+`googlebook-vm start` refusing with the message.
+
 ## Tests
 
 | command | expected |
