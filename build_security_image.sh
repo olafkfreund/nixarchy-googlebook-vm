@@ -61,7 +61,7 @@ fi
 
 python3 "$HERE/make_lapis_security_port.py" \
   --raw "$RAW" --donor "$DONOR" --out "$OUT" \
-  --initrd "$STATE/initrd" \
+  --initrd "$STATE/initrd" --firmware "$STATE/firmware" \
   --venus-lib "$STATE/guest-mesa/libvulkan_virtio.so" --virgl-dir "$STATE/guest-mesa/gl" \
   --locksettings --diagnostics --composer --vmcompat $VENUS $VIRGL "$@"
 

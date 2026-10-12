@@ -50,7 +50,7 @@ def find(offset, root, wanted, depth=0):
 
 dlkm = lp_partitions(gpt['super'][0])['system_dlkm_a']
 own = ['virtio_pci_legacy_dev.ko', 'virtio_pci_modern_dev.ko', 'virtio_pci.ko', 'virtio_blk.ko', 'virtio_console.ko']
-added = ['virtio_dma_buf.ko', 'virtio-gpu.ko', 'virtio_input.ko', 'failover.ko', 'net_failover.ko', 'virtio_net.ko', 'virtio-rng.ko']
+added = ['virtio_dma_buf.ko', 'virtio-gpu.ko', 'virtio_input.ko', 'failover.ko', 'net_failover.ko', 'virtio_net.ko', 'virtio-rng.ko', 'virtio_snd.ko']
 deps = {'virtio_pci.ko': ['virtio_pci_legacy_dev.ko', 'virtio_pci_modern_dev.ko'], 'virtio-gpu.ko': ['virtio_dma_buf.ko'],
         'net_failover.ko': ['failover.ko'], 'virtio_net.ko': ['net_failover.ko', 'failover.ko']}
 paths = find(dlkm, '/lib/modules', set(own)); assert set(paths) == set(own), paths
