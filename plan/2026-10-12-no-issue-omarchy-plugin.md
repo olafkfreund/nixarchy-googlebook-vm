@@ -569,6 +569,56 @@ Verify: the selftest (now including `unsupported-cpu`), `nix flake check`,
 `qmllint`, and on p620 `googlebook-vm status` → `unsupported-cpu` and
 `googlebook-vm start` refusing with the message.
 
+### Step 6c (fixes from the independent review, 2026-10-12)
+
+The review (fresh Opus agent, plan + diff only) returned "ready after fixes".
+Each item names the finding and the chosen fix.
+
+1. **Half-built image counted as done (HIGH).** `make_lapis_security_port.py`
+   creates `googlebook-security.bin` before patching it, and the userdata
+   expansion runs afterwards, so an interrupted build leaves the final name in
+   place and `_setup` skipped step 7 on it. Fix: `build_security_image.sh`
+   removes `$OUT/.complete` before building and writes it only after
+   `expand_lapis_userdata.py` succeeds (or after the build, with `--no-copy`).
+   `_setup` skips step 7 only when `.complete` exists. With the `.bin` present
+   but no marker, step 7 fails with "incomplete image from an interrupted build:
+   run googlebook-vm rebuild". The CLI never removes it on its own, because it
+   may hold Android's data.
+2. **Retries used unverified inputs (HIGH).** A failed `verify` left modules and
+   the donor zip in place, and the `_setup` skip rules then used them. Fix:
+   `_setup` gets a step `verify downloads`, run after the fetch steps and before
+   anything uses them. It runs `verify` on the recovery `.bin`, every pinned
+   `modules/*.ko` and the donor zip. A mismatch deletes that file and fails,
+   naming it: `checksum mismatch: FILE (deleted; run setup again to download it
+   again)`. `fetch_cuttlefish_donor.sh` downloads to `$ZIP.part` and renames
+   only after curl succeeds. Step 2's skip rule is "all pinned modules present".
+   This makes step 11.7 fail as the plan expects.
+3. **`kill` did nothing without the QMP socket (MEDIUM).** `qmp` returns 1
+   instead of calling `die`. `stop` dies itself with the old message. `kill`
+   falls through to `systemctl --user stop googlebook-vm`.
+4. **A guest panic read `stopped`, not `failed` (MEDIUM).** With `-no-reboot`, a
+   guest reset is a normal QEMU exit 0 (seen under TCG: `rc=0`). Fix: `_vm`
+   writes `exit-code` to `vm.result` when the serial log of this run contains
+   `Kernel panic`. The step 6b.4 claim is corrected by this item.
+5. **QMP errors hidden (MEDIUM).** socat's stderr is discarded only for `quit`.
+6. **`S` offered while the drive is mounted on the host (MEDIUM).** Menu: `S` is
+   not offered while `share` is non-empty, and the menu shows "Shared drive is
+   open on the host: press D to release it". New key `D` runs `googlebook-vm
+   files --done` and is offered only while `share` is non-empty.
+7. **Licence metadata (LOW).** `packages.googlebook-vm` gets `free = false;`
+   (upstream has no licence, so all rights are reserved), which supersedes the
+   step 8 note. A user needs `allowUnfree` (nixarchy has
+   `programs.nixarchy.allowUnfree`) or an `allowUnfreePredicate`. The comment
+   stops claiming that `redistributable = false` keeps caches from publishing.
+8. **State paths with a space or comma (LOW).** The CLI refuses a `STATE` path
+   containing a space or a comma, with a clear message (QEMU option values
+   cannot carry them unescaped).
+
+Verify: selftest cases for 1 (`.bin` without `.complete` → step 7 fails; with
+`.complete` → skipped), 2 (a tampered pinned file → setup fails naming it, and it
+is deleted), 3 (`kill` with no socket still reaches `systemctl`), 4 (a stub serial
+log with "Kernel panic" → `failed`) and 8. Then `nix flake check` and `qmllint`.
+
 ## Tests
 
 | command | expected |
