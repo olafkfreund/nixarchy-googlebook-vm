@@ -90,6 +90,13 @@ printed; `sha256sum -c checksums.sha256` passes.
 Traps: the 19 GB `.bin` and zips are gitignored. Commit only `checksums.sha256`.
 `GBOS_KEEP_ZIP=1` is not needed: the `.bin` is what gets pinned, not the zip.
 
+**Step 1 as run (deviation):** `ci.android.com`'s build page is now rendered
+client-side and lists no artifacts, so `fetch_kernel_modules.sh` exited with
+"no artifacts found". Each artifact's own page still carries `artifactUrl`, so
+when the listing is empty the script now resolves each wanted module by name. The
+inputs were fetched with the branch scripts, `GBOS_STATE=~/.local/share/googlebook-vm`
+and `GBOS_UNVERIFIED=1` (the pins did not exist yet).
+
 ### 2. Probe virtio-fs, SELinux and audio support (static, no boot)
 
 Then run `./prepare.sh` (it produces `firmware/` and `initrd`). Write the probe
