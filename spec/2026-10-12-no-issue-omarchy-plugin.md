@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: none (issues are disabled on this repository)
 intent: intent/2026-10-12-no-issue-omarchy-plugin.md
 ---
