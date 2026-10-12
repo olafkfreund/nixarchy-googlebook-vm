@@ -439,6 +439,18 @@ Traps: `omarchy plugin validate` is not in nixpkgs. Run it in step 7 and step 11
 not in the sandboxed check. `.gitignore` ignores `*.bin` and `*.zip`, so make sure
 no input file is needed in the source; the flake uses only tracked files.
 
+**Step 8 as implemented (deviations):**
+- `packages.googlebook-vm` uses a custom licence attrset
+  (`fullName = "Unlicensed upstream (chaitan3/gbos-vm-linux) + MIT"; free = true;
+  redistributable = false;`) instead of `lib.licenses.unfree`. Unfree would force
+  `allowUnfree` on every user just to install a script wrapper;
+  `redistributable = false` keeps Hydra and binary caches from publishing the
+  upstream scripts, which is the actual concern.
+- The check copies the source and runs `patchShebangs bin`: the build sandbox has
+  no `/usr/bin/env`. It also runs `bash -n` on `dev/*.sh`; `dev/` is not shipped.
+- `x86_64-linux` only (the guest is x86_64 and needs KVM).
+- `keybinding = null` installs no binds file.
+
 ### 9. README
 
 Add "Install on nixarchy" first: the flake input, the host module snippet below,
