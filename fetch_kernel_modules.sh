@@ -12,11 +12,12 @@
 # Re-runnable; needs access to ci.android.com.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+. "$HERE/lib.sh"
 BUILD="${1:-16302624}"
 TARGET="${2:-kernel_virt_x86_64}"
-OUT="${3:-$HERE/modules}"
+OUT="${3:-$STATE/modules}"
 mkdir -p "$OUT"
-exec python3 - "$BUILD" "$TARGET" "$OUT" <<'PY'
+python3 - "$BUILD" "$TARGET" "$OUT" <<'PY'
 import io
 import json
 import re
@@ -126,3 +127,4 @@ if remaining:
     sys.exit('missing modules: ' + ', '.join(sorted(remaining)))
 print(f'done: {len(want)} modules in {out}')
 PY
+for f in "$OUT"/*.ko; do verify "$f"; done

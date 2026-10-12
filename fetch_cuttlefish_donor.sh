@@ -8,9 +8,11 @@
 # Find BUILD on https://ci.android.com (pick a target/BUILD whose aosp_cf_x86_64_only_phone
 # image exists); TARGET defaults to aosp_cf_x86_64_only_phone-userdebug.
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+. "$HERE/lib.sh"
 BUILD=${1:?usage: fetch_cuttlefish_donor.sh BUILD [TARGET] [OUTDIR]}
 TARGET=${2:-aosp_cf_x86_64_only_phone-userdebug}
-OUT=${3:-.}
+OUT=${3:-$STATE}
 STEM=${TARGET%-userdebug}
 ZIP="$STEM-img-$BUILD.zip"
 URL="https://ci.android.com/builds/submitted/$BUILD/$TARGET/latest/$ZIP"
@@ -24,5 +26,6 @@ PY
 echo "artifact: $ART"
 mkdir -p "$OUT"
 curl -fL --progress-bar "$ART" -o "$OUT/$ZIP"
+verify "$OUT/$ZIP"
 echo "downloaded $OUT/$ZIP"
 echo "now run: python3 unpack_cuttlefish_donor.py $OUT/$ZIP <donor-dir>"

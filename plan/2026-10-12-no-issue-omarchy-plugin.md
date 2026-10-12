@@ -151,6 +151,19 @@ Traps: `HERE` must keep meaning "where the code is". Outputs never go to `HERE`
 when `GBOS_STATE` is set. Keep every existing error message and guard. The
 `GBOS_FORCE` refusal (`build_security_image.sh:32-46`) is untouched.
 
+**Step 3 as implemented (deviations):**
+- `--firmware "$STATE/firmware"` is **not** passed yet: the flag does not exist
+  until step 4, and argparse would reject it. Step 4 adds it to the
+  `build_security_image.sh` call.
+- `fetch_recovery_image.sh` deletes `OUT` when `verify` fails. Otherwise the next
+  run says "already present" and never checks it again.
+- The NDK download runs only when `$NDK` is missing **and** `ANDROID_NDK` is
+  unset, after the `--download-only` exit. An explicit wrong `ANDROID_NDK` still
+  hits the existing "NDK not found" error.
+- The Mesa tarball is verified whenever it exists.
+- A custom output path outside `$STATE` counts as unpinned and fails (the
+  `${FILE#$STATE/}` rule); `GBOS_UNVERIFIED=1` covers that case.
+
 ### 4. Guest image: modules and share
 
 Common:

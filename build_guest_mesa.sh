@@ -6,24 +6,25 @@
 # (patches/mesa-android-mapper5.patch), because the Android NDK does not ship the
 # AIDL mapper headers / `ui` pkg-config that upstream Mesa's IMapper5 path needs.
 #
-# Everything is placed under this script's directory. Re-runnable / idempotent.
+# Everything is placed under $GBOS_STATE (default: this script's directory). Re-runnable / idempotent.
 #
 # Usage:
 #   ./build_guest_mesa.sh                 # fetch sources + build
 #   ./build_guest_mesa.sh --download-only # only fetch/cache sources, no compile
 # Env overrides:
-#   ANDROID_NDK   (default: ./android-ndk-r30)
+#   ANDROID_NDK   (default: $GBOS_STATE/android-ndk-r30; downloaded if missing)
 #   ANDROID_API   (default: 37)
 #   MESA_VERSION  (default: 26.2.4)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-NDK="${ANDROID_NDK:-$HERE/android-ndk-r30}"
+. "$HERE/lib.sh"
+NDK="${ANDROID_NDK:-$STATE/android-ndk-r30}"
 API="${ANDROID_API:-37}"
 MESA_VERSION="${MESA_VERSION:-26.2.4}"
-MESA_SRC="$HERE/mesa-$MESA_VERSION"
-VENUS_SRC="$HERE/mesa-$MESA_VERSION-venus"
-BUILD="$HERE/mesa-build/build-venus"
+MESA_SRC="$STATE/mesa-$MESA_VERSION"
+VENUS_SRC="$STATE/mesa-$MESA_VERSION-venus"
+BUILD="$STATE/mesa-build/build-venus"
 CACHE="$VENUS_SRC/subprojects/packagecache"
 PATCH="$HERE/patches/mesa-android-mapper5.patch"
 MESA_URL="https://archive.mesa3d.org/mesa-$MESA_VERSION.tar.xz"
@@ -54,17 +55,18 @@ for t in curl sha256sum; do need "$t"; done
 [ "$DOWNLOAD_ONLY" = 0 ] && { for t in meson ninja patch; do need "$t"; done; }
 
 say "Mesa $MESA_VERSION source"
-if [ ! -d "$MESA_SRC" ] && [ ! -f "$HERE/mesa-$MESA_VERSION.tar.xz" ]; then
+if [ ! -d "$MESA_SRC" ] && [ ! -f "$STATE/mesa-$MESA_VERSION.tar.xz" ]; then
   say "downloading $MESA_URL"
-  curl -fL --retry 3 -o "$HERE/mesa-$MESA_VERSION.tar.xz.part" "$MESA_URL" \
-    || curl -fL --retry 3 -o "$HERE/mesa-$MESA_VERSION.tar.xz.part" "$MESA_URL_FALLBACK" \
-    || { rm -f "$HERE/mesa-$MESA_VERSION.tar.xz.part"; die "could not download Mesa"; }
-  mv "$HERE/mesa-$MESA_VERSION.tar.xz.part" "$HERE/mesa-$MESA_VERSION.tar.xz"
+  curl -fL --retry 3 -o "$STATE/mesa-$MESA_VERSION.tar.xz.part" "$MESA_URL" \
+    || curl -fL --retry 3 -o "$STATE/mesa-$MESA_VERSION.tar.xz.part" "$MESA_URL_FALLBACK" \
+    || { rm -f "$STATE/mesa-$MESA_VERSION.tar.xz.part"; die "could not download Mesa"; }
+  mv "$STATE/mesa-$MESA_VERSION.tar.xz.part" "$STATE/mesa-$MESA_VERSION.tar.xz"
 fi
+if [ -f "$STATE/mesa-$MESA_VERSION.tar.xz" ]; then verify "$STATE/mesa-$MESA_VERSION.tar.xz"; fi
 if [ ! -d "$MESA_SRC" ]; then
-  [ -f "$HERE/mesa-$MESA_VERSION.tar.xz" ] || die "Mesa source missing at $MESA_SRC"
-  tar -xf "$HERE/mesa-$MESA_VERSION.tar.xz" -C "$HERE"
-  [ -d "$MESA_SRC" ] || mv "$HERE"/mesa-mesa-$MESA_VERSION "$MESA_SRC" 2>/dev/null || true
+  [ -f "$STATE/mesa-$MESA_VERSION.tar.xz" ] || die "Mesa source missing at $MESA_SRC"
+  tar -xf "$STATE/mesa-$MESA_VERSION.tar.xz" -C "$STATE"
+  [ -d "$MESA_SRC" ] || mv "$STATE"/mesa-mesa-$MESA_VERSION "$MESA_SRC" 2>/dev/null || true
 fi
 [ -f "$MESA_SRC/VERSION" ] || die "Mesa source not found at $MESA_SRC"
 echo "Mesa source: $MESA_SRC"
@@ -110,14 +112,24 @@ if [ "$DOWNLOAD_ONLY" = 1 ]; then
   exit 0
 fi
 
+NDK_ZIP="$STATE/android-ndk-r30-linux.zip"
+if [ ! -d "$NDK" ] && [ -z "${ANDROID_NDK:-}" ]; then
+  say "downloading Android NDK r30"
+  need unzip
+  curl -fL --retry 3 -C - -o "$NDK_ZIP.part" "https://dl.google.com/android/repository/android-ndk-r30-linux.zip"
+  mv "$NDK_ZIP.part" "$NDK_ZIP"
+  verify "$NDK_ZIP"
+  unzip -q "$NDK_ZIP" -d "$STATE"
+fi
+
 TB="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 TBROOT="${TB%/bin}"
 [ -x "$TB/x86_64-linux-android${API}-clang" ] \
   || die "NDK not found at $NDK (expected $TB/x86_64-linux-android${API}-clang). Set ANDROID_NDK."
 
 say "meson cross file"
-mkdir -p "$HERE/mesa-build/android-pkgconfig"
-cat > "$HERE/mesa-build/cross-x86_64-android.ini" <<EOF
+mkdir -p "$STATE/mesa-build/android-pkgconfig"
+cat > "$STATE/mesa-build/cross-x86_64-android.ini" <<EOF
 [constants]
 ndk = '$TBROOT'
 [binaries]
@@ -135,13 +147,13 @@ cpu = 'x86_64'
 endian = 'little'
 [properties]
 needs_exe_wrapper = true
-pkg_config_libdir = '$HERE/mesa-build/android-pkgconfig'
+pkg_config_libdir = '$STATE/mesa-build/android-pkgconfig'
 EOF
 
 say "meson setup (venus only, expat disabled on Android)"
 if [ ! -f "$BUILD/build.ninja" ]; then
   meson setup "$BUILD" "$VENUS_SRC" \
-    --cross-file "$HERE/mesa-build/cross-x86_64-android.ini" --buildtype=release \
+    --cross-file "$STATE/mesa-build/cross-x86_64-android.ini" --buildtype=release \
     --wrap-mode=nodownload \
     -Dforce_fallback_for=libdrm -Dallow-fallback-for=libdrm -Dlibdrm:default_library=static \
     -Dexpat=disabled \
@@ -155,20 +167,20 @@ say "ninja: libvulkan_virtio.so"
 ninja -C "$BUILD" src/virtio/vulkan/libvulkan_virtio.so
 
 say "strip + install"
-mkdir -p "$HERE/guest-mesa"
-"$TB/llvm-strip" --strip-unneeded -o "$HERE/guest-mesa/libvulkan_virtio.so" \
+mkdir -p "$STATE/guest-mesa"
+"$TB/llvm-strip" --strip-unneeded -o "$STATE/guest-mesa/libvulkan_virtio.so" \
   "$BUILD/src/virtio/vulkan/libvulkan_virtio.so"
-file "$HERE/guest-mesa/libvulkan_virtio.so"
-ls -l "$HERE/guest-mesa/libvulkan_virtio.so"
+file "$STATE/guest-mesa/libvulkan_virtio.so"
+ls -l "$STATE/guest-mesa/libvulkan_virtio.so"
 
 say "meson setup (VirGL GLES for SurfaceFlinger/HWUI)"
-GLES_BUILD="$HERE/mesa-build/build-gles"
+GLES_BUILD="$STATE/mesa-build/build-gles"
 mkdir -p "$MESA_SRC/subprojects/packagecache"
 [ -f "$MESA_SRC/subprojects/packagecache/libdrm-$LIBDRM_VERSION.tar.xz" ] \
   || cp "$LIBDRM_FILE" "$MESA_SRC/subprojects/packagecache/"
 if [ ! -f "$GLES_BUILD/build.ninja" ]; then
   meson setup "$GLES_BUILD" "$MESA_SRC" \
-    --cross-file "$HERE/mesa-build/cross-x86_64-android.ini" --buildtype=release \
+    --cross-file "$STATE/mesa-build/cross-x86_64-android.ini" --buildtype=release \
     --wrap-mode=nodownload \
     -Dforce_fallback_for=libdrm -Dallow-fallback-for=libdrm -Dlibdrm:default_library=static \
     -Dexpat=disabled \
@@ -187,11 +199,11 @@ ninja -C "$GLES_BUILD" \
   src/gallium/targets/dri/libgallium_dri.so
 
 say "strip + install (GLES)"
-mkdir -p "$HERE/guest-mesa/gl"
+mkdir -p "$STATE/guest-mesa/gl"
 for f in src/egl/libEGL_virgl.so src/mesa/glapi/es1api/libGLESv1_CM_virgl.so \
          src/mesa/glapi/es2api/libGLESv2_virgl.so src/gallium/targets/dri/libgallium_dri.so; do
-  "$TB/llvm-strip" --strip-unneeded -o "$HERE/guest-mesa/gl/$(basename "$f")" "$GLES_BUILD/$f"
+  "$TB/llvm-strip" --strip-unneeded -o "$STATE/guest-mesa/gl/$(basename "$f")" "$GLES_BUILD/$f"
 done
-ls -l "$HERE/guest-mesa/gl"
+ls -l "$STATE/guest-mesa/gl"
 
 say "done: guest-mesa/{libvulkan_virtio.so,gl/*}"

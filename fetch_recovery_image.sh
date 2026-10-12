@@ -8,9 +8,10 @@
 #      GBOS_KEEP_ZIP=1 to keep the archive after extraction (default: remove it).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT="${1:-$HERE/android-desktop_signed_recovery_image.bin}"
+. "$HERE/lib.sh"
+OUT="${1:-$STATE/android-desktop_signed_recovery_image.bin}"
 URL="${GBOS_RECOVERY_URL:-https://dl.google.com/device/recovery/lapis-user/16452207/recovery.zip}"
-ZIP="${GBOS_RECOVERY_ZIP:-$HERE/recovery.zip}"
+ZIP="${GBOS_RECOVERY_ZIP:-$STATE/recovery.zip}"
 ENTRY=android-desktop_signed_recovery_image.bin
 
 if [ -f "$OUT" ]; then
@@ -49,6 +50,7 @@ with zipfile.ZipFile(zip_path) as z:
 os.replace(out + '.part', out)
 print('sha256', h.hexdigest())
 PY
+verify "$OUT" || { rm -f "$OUT"; exit 1; }
 ls -l "$OUT"
 
 if [ "${GBOS_KEEP_ZIP:-0}" != 1 ]; then

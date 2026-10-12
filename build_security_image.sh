@@ -3,9 +3,10 @@
 #   build_security_image.sh [extra make_lapis_security_port.py args]
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-RAW=${GBOS_RAW:-$HERE/android-desktop_signed_recovery_image.bin}
-DONOR=${GBOS_DONOR:-$HERE/donor}
-OUT=${GBOS_SECURITY_DIR:-$HERE/image-security}
+. "$HERE/lib.sh"
+RAW=${GBOS_RAW:-$STATE/android-desktop_signed_recovery_image.bin}
+DONOR=${GBOS_DONOR:-$STATE/donor}
+OUT=${GBOS_SECURITY_DIR:-$STATE/image-security}
 
 if [ ! -f "$DONOR/keymint-service" ]; then
   cat >&2 <<EOF
@@ -22,7 +23,7 @@ EOF
   exit 1
 fi
 
-for f in "$HERE/firmware/gpt.json" "$HERE/initrd"; do
+for f in "$STATE/firmware/gpt.json" "$STATE/initrd"; do
   if [ ! -f "$f" ]; then
     echo "missing $f; run ./prepare.sh first (see README.md)" >&2
     exit 1
@@ -46,20 +47,22 @@ EOF
 fi
 
 VENUS=""
-if [ -f "$HERE/guest-mesa/libvulkan_virtio.so" ]; then
+if [ -f "$STATE/guest-mesa/libvulkan_virtio.so" ]; then
   VENUS="--venus"
 else
-  echo "note: $HERE/guest-mesa/libvulkan_virtio.so not found; building without Venus (run build_guest_mesa.sh first)" >&2
+  echo "note: $STATE/guest-mesa/libvulkan_virtio.so not found; building without Venus (run build_guest_mesa.sh first)" >&2
 fi
 VIRGL=""
-if [ -f "$HERE/guest-mesa/gl/libEGL_virgl.so" ]; then
+if [ -f "$STATE/guest-mesa/gl/libEGL_virgl.so" ]; then
   VIRGL="--virgl"
 else
-  echo "note: $HERE/guest-mesa/gl/libEGL_virgl.so not found; building without VirGL GLES (run build_guest_mesa.sh first)" >&2
+  echo "note: $STATE/guest-mesa/gl/libEGL_virgl.so not found; building without VirGL GLES (run build_guest_mesa.sh first)" >&2
 fi
 
 python3 "$HERE/make_lapis_security_port.py" \
   --raw "$RAW" --donor "$DONOR" --out "$OUT" \
+  --initrd "$STATE/initrd" \
+  --venus-lib "$STATE/guest-mesa/libvulkan_virtio.so" --virgl-dir "$STATE/guest-mesa/gl" \
   --locksettings --diagnostics --composer --vmcompat $VENUS $VIRGL "$@"
 
 # The captured image ships a ~4 GiB userdata, which fills during first boot (ENOSPC).
