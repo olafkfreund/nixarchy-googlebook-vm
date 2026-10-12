@@ -61,9 +61,17 @@ this file in the same commit as the code.
    `fetch_kernel_modules.sh:32` fetches it. Step 4 adds it.
 2. `make_lapis_security_port.py:337` reads `ROOT/firmware/gpt.json`, so besides
    `--hostshare` it needs a `--firmware DIR` flag (default `ROOT/firmware`).
-3. The repository has **no LICENSE**. The plugin package needs one. **Decision
-   needed at plan approval:** which licence (the `nixarchy.winvm` precedent is
-   MIT). Step 7 is blocked until it is given; do not invent one.
+3. The repository has **no LICENSE**. **Decided at approval: MIT**, with a limit
+   found on checking. This repository is a fork of `chaitan3/gbos-vm-linux`, which
+   has no licence, and every pre-existing file is Chaitanya Talnikar's. MIT can
+   therefore cover only files this fork adds (the plugin files, `bin/`,
+   `lib.sh`, `flake.nix`, `dev/`, `checksums.sha256`). `LICENSE` is the MIT
+   text with `Copyright (c) 2026 Olaf Krasicki Freund`, followed by a
+   `Scope` paragraph naming those files. The upstream files stay under their
+   author's terms until he licenses them. `packages.plugin` contains only MIT
+   files. `packages.googlebook-vm` bundles upstream scripts; its `meta.license`
+   is `lib.licenses.unfree` until upstream has a licence, so it is not
+   presented as free software.
 
 ## Steps
 
@@ -245,10 +253,10 @@ Traps: never pass user-controlled strings through `sh -c`; build argv arrays.
 The QMP socket is in `$XDG_RUNTIME_DIR` (0700), never `/tmp`. `kill` is the only
 path that does not let Android shut down.
 
-### 7. Plugin files (blocked on the licence decision)
+### 7. Plugin files
 
 - `manifest.json`: `{"schemaVersion":1,"id":"nixarchy.googlebook","name":"Googlebook VM",
-  "version":"1.0.0","author":"olafkfreund","license":"<decided>","description":"Set up, start and stop the Googlebook Android VM",
+  "version":"1.0.0","author":"olafkfreund","license":"MIT","description":"Set up, start and stop the Googlebook Android VM",
   "homepage":"https://github.com/olafkfreund/nixarchy-googlebook-vm","kinds":["menu"],
   "entryPoints":{"menu":"Menu.qml"},"keepLoaded":true}`.
 - `Menu.qml`: copy the window and keyboard skeleton of
